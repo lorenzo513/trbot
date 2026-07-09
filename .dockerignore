@@ -1,0 +1,12 @@
+__pycache__/
+.idea/
+.venv/
+.env
+.env.*
+!.env.example
+*.pyc
+*.pyo
+*.pyd
+*.db
+*.sqlite3
+storico_trade.csv

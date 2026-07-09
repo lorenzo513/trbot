@@ -1,0 +1,5 @@
+ccxt
+pandas
+requests
+streamlit
+google-cloud-storage
