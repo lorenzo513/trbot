@@ -205,7 +205,6 @@ def check_signals() -> None:
 
 def run_bot(stop_event: Event | None = None, poll_seconds: int = 300) -> None:
     ensure_trade_history()
-    send_telegram_message("Bot avviato")
 
     ultimo_controllo_prelievo = None
     check_signals()
