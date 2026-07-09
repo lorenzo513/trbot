@@ -166,29 +166,6 @@ if ($LASTEXITCODE -ne 0) {
 $dashboardImage = Build-Image -Dockerfile "Dockerfile.dashboard" -ImageName $DashboardImageName
 $botImage = Build-Image -Dockerfile "Dockerfile.bot" -ImageName $BotImageName
 
-if ([string]::IsNullOrWhiteSpace($StreamlitAuthUsername)) {
-    $StreamlitAuthUsername = Get-PlainTextSecret -EnvName "STREAMLIT_AUTH_USERNAME" -Prompt "STREAMLIT_AUTH_USERNAME"
-}
-if ([string]::IsNullOrWhiteSpace($StreamlitAuthPassword)) {
-    $StreamlitAuthPassword = Get-PlainTextSecret -EnvName "STREAMLIT_AUTH_PASSWORD" -Prompt "STREAMLIT_AUTH_PASSWORD"
-}
-if ([string]::IsNullOrWhiteSpace($StreamlitCookieSecret)) {
-    $StreamlitCookieSecret = Get-PlainTextSecret -EnvName "STREAMLIT_COOKIE_SECRET" -Prompt "STREAMLIT_COOKIE_SECRET"
-}
-
-function Get-StreamlitPasswordHash {
-    param([string]$Password)
-    $sha = [System.Security.Cryptography.SHA256]::Create()
-    try {
-        $bytes = [System.Text.Encoding]::UTF8.GetBytes($Password)
-        $hashBytes = $sha.ComputeHash($bytes)
-        return ($hashBytes | ForEach-Object { $_.ToString("x2") }) -join ""
-    }
-    finally {
-        $sha.Dispose()
-    }
-}
-
 $dashboardSecrets = "KRAKEN_API_KEY=kraken-api-key:latest,KRAKEN_SECRET=kraken-secret:latest,STREAMLIT_AUTH_USERNAME=streamlit-auth-username:latest,STREAMLIT_AUTH_PASSWORD_HASH=streamlit-auth-password-hash:latest,STREAMLIT_COOKIE_SECRET=streamlit-cookie-secret:latest"
 
 & gcloud run deploy $DashboardServiceName `

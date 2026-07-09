@@ -6,7 +6,7 @@ from storage import empty_trade_history, load_trade_history
 
 st.set_page_config(page_title="Kraken Trading Bot Dashboard", layout="wide", page_icon="chart")
 
-require_streamlit_auth()
+require_cookie_auth()
 
 st.markdown(
     """
