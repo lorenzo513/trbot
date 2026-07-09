@@ -208,7 +208,6 @@ def run_bot(stop_event: Event | None = None, poll_seconds: int = 300) -> None:
     send_telegram_message("Bot avviato")
 
     ultimo_controllo_prelievo = None
-    print("analisi")
     check_signals()
 
     ora_attuale = datetime.datetime.now()

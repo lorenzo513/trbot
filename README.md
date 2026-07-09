@@ -30,6 +30,7 @@ Optional dashboard auth:
 
 - `STREAMLIT_AUTH_USERNAME`
 - `STREAMLIT_AUTH_PASSWORD`
+- `STREAMLIT_COOKIE_SECRET`
 
 Optional:
 
@@ -72,7 +73,7 @@ It reads the secret values from environment variables first, then prompts if the
 - `KRAKEN_WITHDRAWAL_ACCOUNT` is optional.
 - `STREAMLIT_AUTH_USERNAME` and `STREAMLIT_AUTH_PASSWORD` are required for dashboard login.
 
-The deploy script hashes `STREAMLIT_AUTH_PASSWORD` before storing it in Secret Manager.
+The deploy script hashes `STREAMLIT_AUTH_PASSWORD` before storing it in Secret Manager and uses `STREAMLIT_COOKIE_SECRET` to sign the persistent login cookie.
 
 ## Example deploy
 

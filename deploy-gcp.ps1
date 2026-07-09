@@ -14,7 +14,8 @@ param(
     [string]$DashboardImageName = "tradebot-dashboard",
     [string]$BotImageName = "tradebot-bot",
     [string]$StreamlitAuthUsername = "",
-    [string]$StreamlitAuthPassword = ""
+    [string]$StreamlitAuthPassword = "",
+    [string]$StreamlitCookieSecret = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -171,6 +172,9 @@ if ([string]::IsNullOrWhiteSpace($StreamlitAuthUsername)) {
 if ([string]::IsNullOrWhiteSpace($StreamlitAuthPassword)) {
     $StreamlitAuthPassword = Get-PlainTextSecret -EnvName "STREAMLIT_AUTH_PASSWORD" -Prompt "STREAMLIT_AUTH_PASSWORD"
 }
+if ([string]::IsNullOrWhiteSpace($StreamlitCookieSecret)) {
+    $StreamlitCookieSecret = Get-PlainTextSecret -EnvName "STREAMLIT_COOKIE_SECRET" -Prompt "STREAMLIT_COOKIE_SECRET"
+}
 
 function Get-StreamlitPasswordHash {
     param([string]$Password)
@@ -185,8 +189,7 @@ function Get-StreamlitPasswordHash {
     }
 }
 
-
-$dashboardSecrets = "KRAKEN_API_KEY=kraken-api-key:latest,KRAKEN_SECRET=kraken-secret:latest,STREAMLIT_AUTH_USERNAME=streamlit-auth-username:latest,STREAMLIT_AUTH_PASSWORD_HASH=streamlit-auth-password-hash:latest"
+$dashboardSecrets = "KRAKEN_API_KEY=kraken-api-key:latest,KRAKEN_SECRET=kraken-secret:latest,STREAMLIT_AUTH_USERNAME=streamlit-auth-username:latest,STREAMLIT_AUTH_PASSWORD_HASH=streamlit-auth-password-hash:latest,STREAMLIT_COOKIE_SECRET=streamlit-cookie-secret:latest"
 
 & gcloud run deploy $DashboardServiceName `
     --project $ProjectId `

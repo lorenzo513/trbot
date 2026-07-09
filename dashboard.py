@@ -1,6 +1,6 @@
 import streamlit as st
 
-from auth import require_streamlit_auth
+from cookie_auth import require_cookie_auth
 from market import CRYPTO_TARGETS, get_account_balance
 from storage import empty_trade_history, load_trade_history
 
