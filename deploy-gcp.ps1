@@ -9,12 +9,12 @@ param(
     [string]$BucketName = "",
     [string]$RuntimeServiceAccount = "tradebot-runner",
     [string]$DashboardServiceName = "tradebot-dashboard",
-    [string]$BotServiceName = "tradebot-bot",
+    [string]$BotJobName = "tradebot-bot-job",
     [string]$TradeHistoryObject = "storico_trade.csv",
     [string]$DashboardImageName = "tradebot-dashboard",
     [string]$BotImageName = "tradebot-bot",
     [string]$StreamlitAuthUsername = "",
-    [string]$StreamlitAuthPasswordHash = ""
+    [string]$StreamlitAuthPassword = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -165,7 +165,28 @@ if ($LASTEXITCODE -ne 0) {
 $dashboardImage = Build-Image -Dockerfile "Dockerfile.dashboard" -ImageName $DashboardImageName
 $botImage = Build-Image -Dockerfile "Dockerfile.bot" -ImageName $BotImageName
 
-$dashboardSecrets = "KRAKEN_API_KEY=kraken-api-key:latest,KRAKEN_SECRET=kraken-secret:latest"
+if ([string]::IsNullOrWhiteSpace($StreamlitAuthUsername)) {
+    $StreamlitAuthUsername = Get-PlainTextSecret -EnvName "STREAMLIT_AUTH_USERNAME" -Prompt "STREAMLIT_AUTH_USERNAME"
+}
+if ([string]::IsNullOrWhiteSpace($StreamlitAuthPassword)) {
+    $StreamlitAuthPassword = Get-PlainTextSecret -EnvName "STREAMLIT_AUTH_PASSWORD" -Prompt "STREAMLIT_AUTH_PASSWORD"
+}
+
+function Get-StreamlitPasswordHash {
+    param([string]$Password)
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($Password)
+        $hashBytes = $sha.ComputeHash($bytes)
+        return ($hashBytes | ForEach-Object { $_.ToString("x2") }) -join ""
+    }
+    finally {
+        $sha.Dispose()
+    }
+}
+
+
+$dashboardSecrets = "KRAKEN_API_KEY=kraken-api-key:latest,KRAKEN_SECRET=kraken-secret:latest,STREAMLIT_AUTH_USERNAME=streamlit-auth-username:latest,STREAMLIT_AUTH_PASSWORD_HASH=streamlit-auth-password-hash:latest"
 
 & gcloud run deploy $DashboardServiceName `
     --project $ProjectId `
@@ -181,16 +202,16 @@ if (-not [string]::IsNullOrWhiteSpace($withdrawalAccount)) {
     $botSecrets += ",KRAKEN_WITHDRAWAL_ACCOUNT=kraken-withdrawal-account:latest"
 }
 
-& gcloud run deploy $BotServiceName `
+& gcloud run jobs deploy $BotJobName `
     --project $ProjectId `
     --region $Region `
     --image=$botImage `
     --service-account $runtimeServiceAccountEmail `
-    --min-instances 1 `
-    --no-cpu-throttling `
-    --set-env-vars "TRADE_HISTORY_BUCKET=$BucketName,TRADE_HISTORY_OBJECT=$TradeHistoryObject" `
+    --command python `
+    --args bot.py `
+    --set-env-vars "TRADE_HISTORY_BUCKET=$BucketName,TRADE_HISTORY_OBJECT=$TradeHistoryObject,BOT_RUN_ONCE=true" `
     --set-secrets $botSecrets | Out-Null
 
 Write-Host "Deploy completed."
 Write-Host "Dashboard service: $DashboardServiceName"
-Write-Host "Bot service: $BotServiceName"
+Write-Host "Bot job: $BotJobName"
