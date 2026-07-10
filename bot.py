@@ -136,7 +136,7 @@ def check_signals() -> None:
             prev_row = df.iloc[-2]
             current_price = last_row["close"]
 
-            if last_row["RSI"] < 35 and prev_row["close"] <= prev_row["EMA_9"] and current_price > last_row["EMA_9"]:
+            if last_row["RSI"] < 40 and prev_row["close"] <= prev_row["EMA_9"] and current_price > last_row["EMA_9"]:
                 amount_to_buy = get_trade_amount() / current_price
                 if amount_to_buy <= 0:
                     continue
