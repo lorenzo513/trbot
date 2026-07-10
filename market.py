@@ -49,3 +49,40 @@ def get_market_data(symbol: str) -> pd.DataFrame:
 def get_account_balance() -> float:
     balance = get_exchange().fetch_balance()
     return float(balance["free"].get("EUR", 0))
+
+
+def get_balance_snapshot() -> dict:
+    balance = get_exchange().fetch_balance()
+    eur = balance.get("EUR", {})
+    return {
+        "free_eur": float(balance["free"].get("EUR", 0)),
+        "used_eur": float(balance["used"].get("EUR", 0)),
+        "total_eur": float(balance["total"].get("EUR", 0)),
+        "raw": balance,
+    }
+
+
+def get_open_positions() -> list[dict]:
+    positions = get_exchange().fetch_positions()
+    open_positions: list[dict] = []
+
+    for position in positions:
+        contracts = float(position.get("contracts") or 0)
+        if contracts <= 0:
+            continue
+        open_positions.append(position)
+
+    return open_positions
+
+
+def get_open_position_counts() -> dict[str, int]:
+    counts = {symbol: 0 for symbol in CRYPTO_TARGETS}
+    for position in get_open_positions():
+        symbol = position.get("symbol")
+        if symbol in counts:
+            counts[symbol] += 1
+    return counts
+
+
+def get_open_positions_count() -> int:
+    return sum(get_open_position_counts().values())

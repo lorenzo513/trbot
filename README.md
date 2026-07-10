@@ -37,6 +37,9 @@ Optional:
 - `MODALITA_PROVA=true` to simulate trades
 - `SOGLIA_PRELIEVO_EUR=200`
 - `TRADE_HISTORY_LOCAL_PATH=storico_trade.csv` for local runs
+- `TRADE_HISTORY_SOURCE=hybrid` to read from Kraken API and mirror to CSV
+- `TRADE_HISTORY_LOOKBACK_DAYS=365` to widen the API history window
+- `TRADE_HISTORY_LIMIT=500` to cap how many fills are requested per symbol
 - `NEWS_MONITOR_ENABLED=true` to enable RSS-based news collection
 - `NEWS_BLOCK_BUYS=true` to use negative sentiment as an entry filter
 - `NEWS_NEGATIVE_THRESHOLD=-0.35` to tune the block sensitivity
@@ -90,6 +93,17 @@ The bot includes an RSS-based news monitor that can score headlines for each tra
 - If `NEWS_BLOCK_BUYS=true`, strongly negative sentiment can block new entries for that symbol.
 
 This keeps the trading loop resilient: news failures do not stop the bot, they only reduce the amount of context available.
+
+## Kraken trade history
+
+When `TRADE_HISTORY_SOURCE=hybrid`, the dashboard and bot read fills from Kraken using `fetch_my_trades` and keep the CSV mirror updated automatically.
+
+- This shows real executed trades, not just a local log file.
+- The local CSV becomes a mirror and backup, not the source of truth.
+- The default window is the last `365` days, adjustable with `TRADE_HISTORY_LOOKBACK_DAYS`.
+- If the API is unavailable, the code falls back to the local history file so the UI stays usable.
+
+Open positions are read separately from Kraken using `fetch_positions()`, so the dashboard and bot always use the exchange as the source of truth for active exposure.
 
 ## Example deploy
 

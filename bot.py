@@ -8,14 +8,15 @@ from market import (
     CRYPTO_TARGETS,
     LEVERAGE,
     MAX_CONCURRENT_TRADES,
-    TRADE_AMOUNT_EUR,
     get_account_balance,
     get_exchange,
+    get_open_position_counts,
+    get_open_positions_count,
     get_market_data,
 )
 from notifications import send_telegram_message
 from news_monitor import analyze_symbol_news, get_news_block_buys_enabled, get_news_negative_threshold
-from storage import append_trade_row, ensure_trade_history, load_trade_history
+from storage import append_trade_row, ensure_trade_history
 
 MODALITA_PROVA = get_bool_env("MODALITA_PROVA", False)
 SOGLIA_PRELIEVO_EUR = float(get_env("SOGLIA_PRELIEVO_EUR", default="200"))
@@ -62,8 +63,18 @@ def controlla_e_preleva_profitti() -> None:
         send_telegram_message(error_msg)
 
 
-def log_trade_to_csv(symbol: str, action: str, amount: float, price: float, stop_loss: float = 0, take_profit: float = 0) -> None:
+def log_trade_to_csv(
+    symbol: str,
+    action: str,
+    amount: float,
+    price: float,
+    stop_loss: float = 0,
+    take_profit: float = 0,
+    order_id: str | None = None,
+    trade_id: str | None = None,
+) -> None:
     new_row = {
+        "source": "LOCAL",
         "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "symbol": symbol,
         "action": action,
@@ -72,24 +83,16 @@ def log_trade_to_csv(symbol: str, action: str, amount: float, price: float, stop
         "leverage": LEVERAGE,
         "stop_loss": stop_loss,
         "take_profit": take_profit,
+        "order_id": order_id,
+        "trade_id": trade_id,
     }
     append_trade_row(new_row)
-
-
-def get_active_trades_count() -> int:
-    df = load_trade_history()
-    buys = df[df["action"] == "BUY"]["symbol"].tolist()
-    sells = df[df["action"] == "SELL"]["symbol"].tolist()
-    for symbol in sells:
-        if symbol in buys:
-            buys.remove(symbol)
-    return len(buys)
 
 
 def get_trade_amount() -> float:
     try:
         eur_disponibili = get_account_balance()
-        trade_attivi = get_active_trades_count()
+        trade_attivi = get_open_positions_count()
         slot_disponibili = MAX_CONCURRENT_TRADES - trade_attivi
 
         if slot_disponibili <= 0:
@@ -109,7 +112,7 @@ def get_trade_amount() -> float:
 
     except Exception as exc:
         print(f"Errore nel recupero del saldo dinamico da Kraken: {exc}")
-        return TRADE_AMOUNT_EUR
+        return 0
 
 
 def _place_protection_order(
@@ -150,14 +153,19 @@ def place_stop_loss_and_take_profit(exchange, symbol: str, amount: float, stop_l
 def check_signals() -> None:
     print(f"[{pd.Timestamp.now().strftime('%H:%M:%S')}] Analisi di mercato in corso...")
 
-    active_count = get_active_trades_count()
+    try:
+        open_position_counts = get_open_position_counts()
+        active_count = sum(open_position_counts.values())
+    except Exception as exc:
+        print(f"Errore nel recupero delle posizioni aperte da Kraken: {exc}")
+        return
+
     if active_count >= MAX_CONCURRENT_TRADES:
         print(f"Raggiunto il limite massimo di trade contemporanei ({active_count}/{MAX_CONCURRENT_TRADES}). Salto l'analisi.")
         return
 
     for symbol in CRYPTO_TARGETS:
         try:
-            df_csv = load_trade_history()
             news_snapshot = analyze_symbol_news(symbol)
             news_label = news_snapshot["label"]
             news_score = float(news_snapshot["score"])
@@ -166,10 +174,8 @@ def check_signals() -> None:
                 print(f"Filtro news attivo: {symbol} bloccato da sentiment negativo ({news_score:.2f}).")
                 continue
 
-            if symbol == "DOGE/EUR" and not df_csv.empty:
-                doge_buys = len(df_csv[(df_csv["symbol"] == "DOGE/EUR") & (df_csv["action"] == "BUY")])
-                doge_sells = len(df_csv[(df_csv["symbol"] == "DOGE/EUR") & (df_csv["action"] == "SELL")])
-                doge_attivi = doge_buys - doge_sells
+            if symbol == "DOGE/EUR":
+                doge_attivi = int(open_position_counts.get("DOGE/EUR", 0))
                 if doge_attivi >= 1:
                     print("DOGE/EUR ha gia un trade attivo. Salto ulteriori segnali per contenere il rischio.")
                     continue
@@ -209,8 +215,9 @@ def check_signals() -> None:
                         params={"leverage": str(LEVERAGE) if symbol != "DOGE/EUR" else "1"},
                     )
                     entry_price = order.get("price", current_price) if order.get("price") else current_price
+                    order_id = order.get("id")
 
-                    log_trade_to_csv(symbol, "BUY", amount_to_buy, entry_price, stop_loss, take_profit)
+                    log_trade_to_csv(symbol, "BUY", amount_to_buy, entry_price, stop_loss, take_profit, order_id=order_id)
 
                     msg = (
                         f"ORDINE COMPRA ESEGUITO\n"

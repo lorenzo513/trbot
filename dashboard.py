@@ -2,7 +2,15 @@ import streamlit as st
 import pandas as pd
 
 from cookie_auth import require_cookie_auth
-from market import CRYPTO_TARGETS, TIMEFRAME, get_account_balance, get_market_data
+from market import (
+    CRYPTO_TARGETS,
+    TIMEFRAME,
+    get_account_balance,
+    get_balance_snapshot,
+    get_market_data,
+    get_open_positions,
+    get_open_position_counts,
+)
 from news_monitor import analyze_symbol_news, get_news_block_buys_enabled, get_news_monitor_enabled
 from storage import empty_trade_history, load_trade_history
 
@@ -38,18 +46,13 @@ df_trades = load_trade_history()
 if df_trades.empty:
     df_trades = empty_trade_history()
 
-
-def get_active_symbol_counts(trades: pd.DataFrame) -> dict[str, int]:
-    if trades.empty:
-        return {symbol: 0 for symbol in CRYPTO_TARGETS}
-
-    buys = trades[trades["action"] == "BUY"]["symbol"].value_counts().to_dict()
-    sells = trades[trades["action"] == "SELL"]["symbol"].value_counts().to_dict()
-
-    active_counts = {}
-    for symbol in CRYPTO_TARGETS:
-        active_counts[symbol] = max(0, int(buys.get(symbol, 0)) - int(sells.get(symbol, 0)))
-    return active_counts
+try:
+    api_open_position_counts = get_open_position_counts()
+    api_open_positions = get_open_positions()
+except Exception as exc:
+    api_open_position_counts = {symbol: 0 for symbol in CRYPTO_TARGETS}
+    api_open_positions = []
+    st.warning(f"Impossibile leggere le posizioni aperte da Kraken: {exc}")
 
 
 @st.cache_data(ttl=60)
@@ -72,8 +75,7 @@ def fetch_market_snapshot(symbol: str) -> dict[str, object]:
     }
 
 
-def build_monitored_crypto_table(trades: pd.DataFrame) -> pd.DataFrame:
-    active_counts = get_active_symbol_counts(trades)
+def build_monitored_crypto_table() -> pd.DataFrame:
     rows = []
 
     for symbol in CRYPTO_TARGETS:
@@ -83,7 +85,7 @@ def build_monitored_crypto_table(trades: pd.DataFrame) -> pd.DataFrame:
                 {
                     "Symbol": symbol,
                     **snapshot,
-                    "Open Trades": active_counts[symbol],
+                    "Open Trades": api_open_position_counts.get(symbol, 0),
                 }
             )
         except Exception as exc:
@@ -94,7 +96,7 @@ def build_monitored_crypto_table(trades: pd.DataFrame) -> pd.DataFrame:
                     "RSI": "N/A",
                     "EMA 9": "N/A",
                     "Signal": f"Error: {exc}",
-                    "Open Trades": active_counts[symbol],
+                    "Open Trades": api_open_position_counts.get(symbol, 0),
                 }
             )
 
@@ -131,6 +133,22 @@ def build_news_table() -> pd.DataFrame:
             )
     return pd.DataFrame(rows)
 
+
+def build_positions_table() -> pd.DataFrame:
+    rows = []
+    for position in api_open_positions:
+        rows.append(
+            {
+                "Symbol": position.get("symbol", "N/A"),
+                "Side": position.get("side", "N/A"),
+                "Contracts": round(float(position.get("contracts") or 0), 8),
+                "Leverage": position.get("leverage", "N/A"),
+                "Unrealized PnL": round(float(position.get("unrealizedPnl") or 0), 4) if position.get("unrealizedPnl") is not None else "N/A",
+                "Entry Price": round(float(position.get("entryPrice") or 0), 4) if position.get("entryPrice") is not None else "N/A",
+            }
+        )
+    return pd.DataFrame(rows)
+
 capitale_iniziale = 100.0
 trade_vincenti = 0
 trade_perdenti = 0
@@ -154,13 +172,14 @@ if not df_trades.empty:
                 trade_perdenti += 1
 
 try:
-    capitale_attuale = get_account_balance()
+    balance_snapshot = get_balance_snapshot()
+    capitale_attuale = balance_snapshot["free_eur"]
 except Exception as exc:
+    balance_snapshot = {"free_eur": 0.0, "used_eur": 0.0, "total_eur": 0.0}
     capitale_attuale = 0.0
     st.warning(f"Impossibile leggere il saldo Kraken: {exc}")
 
-trade_attivi = len(df_trades[df_trades["action"] == "BUY"]) - len(df_trades[df_trades["action"] == "SELL"])
-trade_attivi = max(0, trade_attivi)
+trade_attivi = sum(api_open_position_counts.values())
 
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Capitale Attuale", f"{round(capitale_attuale, 2)} EUR", f"{round(profitto_totale, 2)} EUR totale")
@@ -170,6 +189,20 @@ col4.metric(
     "Win Rate",
     f"{round((trade_vincenti / (trade_vincenti + trade_perdenti) * 100), 1) if (trade_vincenti + trade_perdenti) > 0 else 0.0} %",
 )
+
+st.markdown("---")
+
+saldo_col1, saldo_col2, saldo_col3 = st.columns(3)
+saldo_col1.metric("EUR Free", f"{round(balance_snapshot['free_eur'], 2)} EUR")
+saldo_col2.metric("EUR Locked", f"{round(balance_snapshot['used_eur'], 2)} EUR")
+saldo_col3.metric("EUR Total", f"{round(balance_snapshot['total_eur'], 2)} EUR")
+
+st.markdown("**Posizioni Aperte da API:**")
+positions_df = build_positions_table()
+if positions_df.empty:
+    st.info("Nessuna posizione aperta rilevata da Kraken.")
+else:
+    st.dataframe(positions_df, use_container_width=True, hide_index=True)
 
 st.markdown("---")
 
@@ -185,7 +218,7 @@ with col_right:
     st.info(f"Strategia: RSI (<40) + incrocio EMA 9\nTimeframe: {TIMEFRAME}")
 
     st.markdown("**Asset Monitorati:**")
-    monitored_df = build_monitored_crypto_table(df_trades)
+    monitored_df = build_monitored_crypto_table()
     st.dataframe(monitored_df, use_container_width=True, hide_index=True)
 
     st.markdown("**News & Sentiment:**")

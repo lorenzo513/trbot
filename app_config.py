@@ -42,3 +42,23 @@ def get_trade_history_object_name() -> str:
 
 def get_trade_history_local_path() -> str:
     return get_env("TRADE_HISTORY_LOCAL_PATH", default="storico_trade.csv")
+
+
+def get_trade_history_source() -> str:
+    return get_env("TRADE_HISTORY_SOURCE", default="hybrid").strip().lower()
+
+
+def get_trade_history_lookback_days() -> int:
+    raw_value = get_env("TRADE_HISTORY_LOOKBACK_DAYS", default="365")
+    try:
+        return max(1, int(raw_value))
+    except ValueError:
+        return 365
+
+
+def get_trade_history_limit() -> int:
+    raw_value = get_env("TRADE_HISTORY_LIMIT", default="500")
+    try:
+        return max(1, int(raw_value))
+    except ValueError:
+        return 500
