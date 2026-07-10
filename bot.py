@@ -14,6 +14,7 @@ from market import (
     get_market_data,
 )
 from notifications import send_telegram_message
+from news_monitor import analyze_symbol_news, get_news_block_buys_enabled, get_news_negative_threshold
 from storage import append_trade_row, ensure_trade_history, load_trade_history
 
 MODALITA_PROVA = get_bool_env("MODALITA_PROVA", False)
@@ -122,6 +123,13 @@ def check_signals() -> None:
     for symbol in CRYPTO_TARGETS:
         try:
             df_csv = load_trade_history()
+            news_snapshot = analyze_symbol_news(symbol)
+            news_label = news_snapshot["label"]
+            news_score = float(news_snapshot["score"])
+
+            if get_news_block_buys_enabled() and news_label == "NEGATIVE" and news_score <= get_news_negative_threshold():
+                print(f"Filtro news attivo: {symbol} bloccato da sentiment negativo ({news_score:.2f}).")
+                continue
 
             if symbol == "DOGE/EUR" and not df_csv.empty:
                 doge_buys = len(df_csv[(df_csv["symbol"] == "DOGE/EUR") & (df_csv["action"] == "BUY")])
@@ -133,10 +141,9 @@ def check_signals() -> None:
 
             df = get_market_data(symbol)
             last_row = df.iloc[-1]
-            prev_row = df.iloc[-2]
             current_price = last_row["close"]
 
-            if last_row["RSI"] < 40 and prev_row["close"] <= prev_row["EMA_9"] and current_price > last_row["EMA_9"]:
+            if last_row["RSI"] < 40 and (current_price > last_row["EMA_9"] or (current_price + 0.05 >= last_row["EMA_9"] and news_label == 'POSITIVE')):
                 amount_to_buy = get_trade_amount() / current_price
                 if amount_to_buy <= 0:
                     continue
@@ -157,6 +164,8 @@ def check_signals() -> None:
                         f"Prezzo ingresso: {round(entry_price, 4)} EUR\n"
                         f"SL: {round(stop_loss, 4)} EUR | TP: {round(take_profit, 4)} EUR"
                     )
+                    if news_label in {"POSITIVE", "NEGATIVE"}:
+                        msg += f"\nSentiment news: {news_label} ({round(news_score, 2)})"
                     send_telegram_message(msg)
                 else:
                     order = exchange.create_market_buy_order(
@@ -176,6 +185,8 @@ def check_signals() -> None:
                         f"Stop Loss: {round(stop_loss, 4)} EUR\n"
                         f"Take Profit: {round(take_profit, 4)} EUR"
                     )
+                    if news_label in {"POSITIVE", "NEGATIVE"}:
+                        msg += f"\nSentiment news: {news_label} ({round(news_score, 2)})"
                     send_telegram_message(msg)
 
                     try:

@@ -37,6 +37,11 @@ Optional:
 - `MODALITA_PROVA=true` to simulate trades
 - `SOGLIA_PRELIEVO_EUR=200`
 - `TRADE_HISTORY_LOCAL_PATH=storico_trade.csv` for local runs
+- `NEWS_MONITOR_ENABLED=true` to enable RSS-based news collection
+- `NEWS_BLOCK_BUYS=true` to use negative sentiment as an entry filter
+- `NEWS_NEGATIVE_THRESHOLD=-0.35` to tune the block sensitivity
+- `NEWS_FEEDS` to override the default RSS sources, comma-separated
+- `NEWS_SENTIMENT_MODEL=ProsusAI/finbert` to request a Hugging Face model if available
 
 ## GCP setup
 
@@ -74,6 +79,17 @@ It reads the secret values from environment variables first, then prompts if the
 - `STREAMLIT_AUTH_USERNAME` and `STREAMLIT_AUTH_PASSWORD` are required for dashboard login.
 
 The deploy script hashes `STREAMLIT_AUTH_PASSWORD` before storing it in Secret Manager and uses `STREAMLIT_COOKIE_SECRET` to sign the persistent login cookie.
+
+## News & Sentiment Monitor
+
+The bot includes an RSS-based news monitor that can score headlines for each tracked crypto pair.
+
+- By default it uses a lightweight local fallback if `transformers` or a model backend is not available.
+- If you want FinBERT-style scoring, install the NLP stack in the runtime image and keep `NEWS_SENTIMENT_MODEL` set.
+- The dashboard shows the latest sentiment snapshot alongside the monitored symbols.
+- If `NEWS_BLOCK_BUYS=true`, strongly negative sentiment can block new entries for that symbol.
+
+This keeps the trading loop resilient: news failures do not stop the bot, they only reduce the amount of context available.
 
 ## Example deploy
 
