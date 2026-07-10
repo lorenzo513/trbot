@@ -112,6 +112,41 @@ def get_trade_amount() -> float:
         return TRADE_AMOUNT_EUR
 
 
+def _place_protection_order(
+    exchange,
+    symbol: str,
+    amount: float,
+    order_type: str,
+    trigger_price: float,
+    limit_price: float,
+) -> None:
+    trigger_price = float(exchange.price_to_precision(symbol, trigger_price))
+    limit_price = float(exchange.price_to_precision(symbol, limit_price))
+
+    exchange.create_order(
+        symbol=symbol,
+        type="limit",
+        side="sell",
+        amount=amount,
+        price=limit_price,
+        params={
+            "leverage": str(LEVERAGE),
+            "stopLossPrice" if order_type == "stop-loss-limit" else "takeProfitPrice": trigger_price,
+        },
+    )
+
+
+def place_stop_loss_and_take_profit(exchange, symbol: str, amount: float, stop_loss: float, take_profit: float) -> None:
+    # Kraken is stricter with trigger orders than the generic CCXT interface.
+    # We use limit-based protection orders with an explicit trigger price and a
+    # slightly more aggressive limit price to improve fill reliability.
+    sl_limit = stop_loss * 0.999
+    tp_limit = take_profit * 0.999
+
+    _place_protection_order(exchange, symbol, amount, "stop-loss-limit", stop_loss, sl_limit)
+    _place_protection_order(exchange, symbol, amount, "take-profit-limit", take_profit, tp_limit)
+
+
 def check_signals() -> None:
     print(f"[{pd.Timestamp.now().strftime('%H:%M:%S')}] Analisi di mercato in corso...")
 
@@ -190,25 +225,13 @@ def check_signals() -> None:
                     send_telegram_message(msg)
 
                     try:
-                        exchange.create_order(
-                            symbol=symbol,
-                            type="stop-loss",
-                            side="sell",
-                            amount=amount_to_buy,
-                            price=stop_loss,
-                            params={"leverage": str(LEVERAGE)},
-                        )
-                        exchange.create_order(
-                            symbol=symbol,
-                            type="take-profit",
-                            side="sell",
-                            amount=amount_to_buy,
-                            price=take_profit,
-                            params={"leverage": str(LEVERAGE)},
-                        )
+                        filled_amount = float(order.get("filled") or amount_to_buy)
+                        place_stop_loss_and_take_profit(exchange, symbol, filled_amount, stop_loss, take_profit)
                         send_telegram_message("Protezioni attivate. Stop Loss e Take Profit impostati correttamente su Kraken.")
                     except Exception as exc:
-                        send_telegram_message(f"Ordine eseguito ma errore nel piazzare SL/TP automatici: {exc}")
+                        send_telegram_message(
+                            f"Ordine eseguito ma errore nel piazzare SL/TP automatici: {exc}"
+                        )
 
         except Exception as exc:
             print(f"Errore durante l'analisi o l'ordine su {symbol}: {exc}")

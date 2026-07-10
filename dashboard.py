@@ -57,7 +57,8 @@ def fetch_market_snapshot(symbol: str) -> dict[str, object]:
     market_df = get_market_data(symbol)
     last_row = market_df.iloc[-1]
     current_price = last_row["close"]
-
+    news_snapshot = analyze_symbol_news(symbol)
+    news_label = news_snapshot["label"]
     signal = (
         "BUY"
         if last_row["RSI"] < 40 and (current_price > last_row["EMA_9"] or (current_price + 0.05 >= last_row["EMA_9"] and news_label == 'POSITIVE'))
