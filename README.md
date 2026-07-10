@@ -105,6 +105,10 @@ When `TRADE_HISTORY_SOURCE=hybrid`, the dashboard and bot read fills from Kraken
 
 Open positions are read separately from Kraken using `fetch_positions()`, so the dashboard and bot always use the exchange as the source of truth for active exposure.
 
+The bot enforces one open position per symbol. If a symbol already has an open position, it skips new entries for that symbol until the position is closed.
+
+If SL/TP placement is rejected for a symbol, the bot logs a `PROTECTION_REJECTED` event and skips new entries for that symbol for 24 hours to avoid retry loops.
+
 ## Example deploy
 
 ```bash

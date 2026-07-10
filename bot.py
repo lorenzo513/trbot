@@ -10,13 +10,14 @@ from market import (
     MAX_CONCURRENT_TRADES,
     get_account_balance,
     get_exchange,
+    has_open_position,
     get_open_position_counts,
     get_open_positions_count,
     get_market_data,
 )
 from notifications import send_telegram_message
 from news_monitor import analyze_symbol_news, get_news_block_buys_enabled, get_news_negative_threshold
-from storage import append_trade_row, ensure_trade_history
+from storage import append_trade_row, ensure_trade_history, has_recent_event, log_protection_rejection
 
 MODALITA_PROVA = get_bool_env("MODALITA_PROVA", False)
 SOGLIA_PRELIEVO_EUR = float(get_env("SOGLIA_PRELIEVO_EUR", default="200"))
@@ -174,17 +175,19 @@ def check_signals() -> None:
                 print(f"Filtro news attivo: {symbol} bloccato da sentiment negativo ({news_score:.2f}).")
                 continue
 
-            if symbol == "DOGE/EUR":
-                doge_attivi = int(open_position_counts.get("DOGE/EUR", 0))
-                if doge_attivi >= 1:
-                    print("DOGE/EUR ha gia un trade attivo. Salto ulteriori segnali per contenere il rischio.")
-                    continue
+            if has_open_position(symbol):
+                print(f"{symbol} ha gia una posizione aperta. Salto ulteriori segnali per evitare sovrapposizioni.")
+                continue
+
+            if has_recent_event(symbol, "PROTECTION_REJECTED", hours=24):
+                print(f"Protezione rifiutata nelle ultime 24 ore per {symbol}. Salto il trade per evitare retry continui.")
+                continue
 
             df = get_market_data(symbol)
             last_row = df.iloc[-1]
             current_price = last_row["close"]
 
-            if last_row["RSI"] < 40 and (current_price > last_row["EMA_9"] or (current_price + 0.05 >= last_row["EMA_9"] and news_label == 'POSITIVE')):
+            if last_row["RSI"] < 40 and (current_price > last_row["EMA_9"] or (current_price >= last_row["EMA_9"] and news_label == 'POSITIVE')):
                 amount_to_buy = get_trade_amount() / current_price
                 if amount_to_buy <= 0:
                     continue
@@ -236,6 +239,7 @@ def check_signals() -> None:
                         place_stop_loss_and_take_profit(exchange, symbol, filled_amount, stop_loss, take_profit)
                         send_telegram_message("Protezioni attivate. Stop Loss e Take Profit impostati correttamente su Kraken.")
                     except Exception as exc:
+                        log_protection_rejection(symbol, str(exc), amount_to_buy, entry_price)
                         send_telegram_message(
                             f"Ordine eseguito ma errore nel piazzare SL/TP automatici: {exc}"
                         )

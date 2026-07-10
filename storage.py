@@ -214,3 +214,38 @@ def append_trade_row(row: dict) -> None:
     row = {"source": "LOCAL", **row}
     df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
     save_trade_history(df)
+
+
+def has_recent_event(symbol: str, action: str, hours: int = 24) -> bool:
+    df = load_trade_history()
+    if df.empty:
+        return False
+
+    cutoff = pd.Timestamp.now() - pd.Timedelta(hours=hours)
+    timestamps = pd.to_datetime(df["timestamp"], errors="coerce")
+    mask = (
+        df["symbol"].astype(str) == symbol
+    ) & (
+        df["action"].astype(str) == action
+    ) & (
+        timestamps >= cutoff
+    )
+    return bool(df[mask].shape[0])
+
+
+def log_protection_rejection(symbol: str, reason: str, amount: float, price: float) -> None:
+    append_trade_row(
+        {
+            "source": "LOCAL",
+            "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "symbol": symbol,
+            "action": "PROTECTION_REJECTED",
+            "amount": amount,
+            "price": price,
+            "leverage": pd.NA,
+            "stop_loss": pd.NA,
+            "take_profit": pd.NA,
+            "order_id": reason,
+            "trade_id": pd.NA,
+        }
+    )

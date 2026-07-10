@@ -64,7 +64,7 @@ def fetch_market_snapshot(symbol: str) -> dict[str, object]:
     news_label = news_snapshot["label"]
     signal = (
         "BUY"
-        if last_row["RSI"] < 40 and (current_price > last_row["EMA_9"] or (current_price + 0.05 >= last_row["EMA_9"] and news_label == 'POSITIVE'))
+        if last_row["RSI"] < 40 and (current_price > last_row["EMA_9"] or (current_price >= last_row["EMA_9"] and news_label == 'POSITIVE'))
         else "WAIT"
     )
     return {

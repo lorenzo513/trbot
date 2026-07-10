@@ -86,3 +86,7 @@ def get_open_position_counts() -> dict[str, int]:
 
 def get_open_positions_count() -> int:
     return sum(get_open_position_counts().values())
+
+
+def has_open_position(symbol: str) -> bool:
+    return get_open_position_counts().get(symbol, 0) > 0
