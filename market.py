@@ -7,7 +7,7 @@ from app_config import get_kraken_credentials
 
 CRYPTO_TARGETS = ["SOL/EUR", "XRP/EUR", "LINK/EUR", "ADA/EUR", "DOGE/EUR", "EDGE/EUR"]
 TIMEFRAME = "5m"
-TRADE_AMOUNT_EUR = 20.0
+TRADE_AMOUNT_EUR = 100.0
 LEVERAGE = 3
 MAX_CONCURRENT_TRADES = 3
 

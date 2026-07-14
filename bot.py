@@ -8,6 +8,7 @@ from market import (
     CRYPTO_TARGETS,
     LEVERAGE,
     MAX_CONCURRENT_TRADES,
+    TRADE_AMOUNT_EUR,
     get_account_balance,
     get_exchange,
     has_open_position,
@@ -22,6 +23,22 @@ from storage import append_trade_row, ensure_trade_history, has_recent_event, lo
 MODALITA_PROVA = get_bool_env("MODALITA_PROVA", False)
 SOGLIA_PRELIEVO_EUR = float(get_env("SOGLIA_PRELIEVO_EUR", default="200"))
 NOME_CONTO_KRAKEN = get_env("KRAKEN_WITHDRAWAL_ACCOUNT", default="revolut")
+
+DEFAULT_STOP_LOSS_MULTIPLIER = 0.98
+DEFAULT_TAKE_PROFIT_MULTIPLIER = 1.04
+SYMBOL_RISK_MULTIPLIERS = {
+    "XRP/EUR": {
+        "stop_loss": 0.85,
+        "take_profit": 1.15,
+    }
+}
+
+
+def get_risk_levels(symbol: str, current_price: float) -> tuple[float, float]:
+    multipliers = SYMBOL_RISK_MULTIPLIERS.get(symbol, {})
+    stop_loss_multiplier = multipliers.get("stop_loss", DEFAULT_STOP_LOSS_MULTIPLIER)
+    take_profit_multiplier = multipliers.get("take_profit", DEFAULT_TAKE_PROFIT_MULTIPLIER)
+    return current_price * stop_loss_multiplier, current_price * take_profit_multiplier
 
 
 def controlla_e_preleva_profitti() -> None:
@@ -92,6 +109,10 @@ def log_trade_to_csv(
 
 def get_trade_amount() -> float:
     try:
+        if MODALITA_PROVA:
+            print(f"Budget fisso in modalita prova: {TRADE_AMOUNT_EUR} EUR per posizione.")
+            return TRADE_AMOUNT_EUR
+
         eur_disponibili = get_account_balance()
         trade_attivi = get_open_positions_count()
         slot_disponibili = MAX_CONCURRENT_TRADES - trade_attivi
@@ -100,16 +121,16 @@ def get_trade_amount() -> float:
             print("Nessuno slot disponibile per fare trading.")
             return 0
 
-        trade_amount_dinamico = eur_disponibili / slot_disponibili
-
-        if trade_amount_dinamico < 5:
-            print(f"Saldo insufficiente per calcolare un trade valido ({trade_amount_dinamico} EUR).")
+        if eur_disponibili < TRADE_AMOUNT_EUR:
+            print(
+                f"Saldo EUR libero: {round(eur_disponibili, 2)} EUR | Budget fisso richiesto: {TRADE_AMOUNT_EUR} EUR"
+            )
             return 0
 
         print(
-            f"Saldo EUR libero: {round(eur_disponibili, 2)} EUR | Budget calcolato per questo trade: {round(trade_amount_dinamico, 2)} EUR"
+            f"Saldo EUR libero: {round(eur_disponibili, 2)} EUR | Budget fisso per questo trade: {TRADE_AMOUNT_EUR} EUR"
         )
-        return trade_amount_dinamico
+        return TRADE_AMOUNT_EUR
 
     except Exception as exc:
         print(f"Errore nel recupero del saldo dinamico da Kraken: {exc}")
@@ -195,8 +216,7 @@ def check_signals() -> None:
                 exchange = get_exchange()
                 amount_to_buy = float(exchange.amount_to_precision(symbol, amount_to_buy))
 
-                stop_loss = current_price * 0.98
-                take_profit = current_price * 1.04
+                stop_loss, take_profit = get_risk_levels(symbol, current_price)
                 if MODALITA_PROVA:
                     entry_price = current_price
                     log_trade_to_csv(symbol, "BUY", amount_to_buy, entry_price, stop_loss, take_profit)
@@ -248,7 +268,7 @@ def check_signals() -> None:
             print(f"Errore durante l'analisi o l'ordine su {symbol}: {exc}")
 
 
-def run_bot(stop_event: Event | None = None, poll_seconds: int = 300) -> None:
+def run_bot() -> None:
     ensure_trade_history()
 
     ultimo_controllo_prelievo = None

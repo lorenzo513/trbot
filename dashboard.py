@@ -1,22 +1,52 @@
-import streamlit as st
 import pandas as pd
+import streamlit as st
 
-from cookie_auth import require_cookie_auth
 from market import (
     CRYPTO_TARGETS,
     TIMEFRAME,
-    get_account_balance,
+    TRADE_AMOUNT_EUR,
     get_balance_snapshot,
     get_market_data,
     get_open_positions,
-    get_open_position_counts,
 )
 from news_monitor import analyze_symbol_news, get_news_block_buys_enabled, get_news_monitor_enabled
 from storage import empty_trade_history, load_trade_history
 
+try:
+    from cookie_auth import require_cookie_auth
+except ImportError:
+    # Older deployments may still expose the session-based auth helper instead.
+    from auth import require_streamlit_auth as require_cookie_auth
+
 st.set_page_config(page_title="Kraken Trading Bot Dashboard", layout="wide", page_icon="chart")
 
 require_cookie_auth()
+
+
+@st.cache_data(ttl=30)
+def fetch_trade_history() -> pd.DataFrame:
+    return load_trade_history()
+
+
+@st.cache_data(ttl=30)
+def fetch_balance_snapshot() -> dict[str, object]:
+    return get_balance_snapshot()
+
+
+@st.cache_data(ttl=30)
+def fetch_positions_snapshot() -> dict[str, object]:
+    open_positions = get_open_positions()
+    open_position_counts = {symbol: 0 for symbol in CRYPTO_TARGETS}
+
+    for position in open_positions:
+        symbol = position.get("symbol")
+        if symbol in open_position_counts:
+            open_position_counts[symbol] += 1
+
+    return {
+        "open_positions": open_positions,
+        "open_position_counts": open_position_counts,
+    }
 
 st.markdown(
     """
@@ -42,13 +72,14 @@ h1, h2, h3 {
 st.title("Kraken Trading Bot Dashboard")
 st.subheader("Monitoraggio in tempo reale del capitale e delle operazioni")
 
-df_trades = load_trade_history()
+df_trades = fetch_trade_history()
 if df_trades.empty:
     df_trades = empty_trade_history()
 
 try:
-    api_open_position_counts = get_open_position_counts()
-    api_open_positions = get_open_positions()
+    positions_snapshot = fetch_positions_snapshot()
+    api_open_position_counts = positions_snapshot["open_position_counts"]
+    api_open_positions = positions_snapshot["open_positions"]
 except Exception as exc:
     api_open_position_counts = {symbol: 0 for symbol in CRYPTO_TARGETS}
     api_open_positions = []
@@ -149,7 +180,33 @@ def build_positions_table() -> pd.DataFrame:
         )
     return pd.DataFrame(rows)
 
-capitale_iniziale = 100.0
+
+def build_currency_table(snapshot: dict[str, object]) -> pd.DataFrame:
+    raw_balance = snapshot.get("raw", {}) if isinstance(snapshot, dict) else {}
+    free = raw_balance.get("free", {}) if isinstance(raw_balance, dict) else {}
+    used = raw_balance.get("used", {}) if isinstance(raw_balance, dict) else {}
+    total = raw_balance.get("total", {}) if isinstance(raw_balance, dict) else {}
+
+    rows = []
+    currencies = sorted(set(free) | set(used) | set(total))
+    for currency in currencies:
+        free_amount = float(free.get(currency, 0) or 0)
+        used_amount = float(used.get(currency, 0) or 0)
+        total_amount = float(total.get(currency, 0) or 0)
+        if free_amount == 0 and used_amount == 0 and total_amount == 0:
+            continue
+        rows.append(
+            {
+                "Currency": currency,
+                "Free": round(free_amount, 8),
+                "Locked": round(used_amount, 8),
+                "Total": round(total_amount, 8),
+            }
+        )
+
+    return pd.DataFrame(rows)
+
+
 trade_vincenti = 0
 trade_perdenti = 0
 profitto_totale = 0.0
@@ -172,23 +229,24 @@ if not df_trades.empty:
                 trade_perdenti += 1
 
 try:
-    balance_snapshot = get_balance_snapshot()
-    capitale_attuale = balance_snapshot["free_eur"]
+    balance_snapshot = fetch_balance_snapshot()
+    capitale_attuale = balance_snapshot["total_eur"]
 except Exception as exc:
     balance_snapshot = {"free_eur": 0.0, "used_eur": 0.0, "total_eur": 0.0}
     capitale_attuale = 0.0
-    st.warning(f"Impossibile leggere il saldo Kraken: {exc}")
+    st.warning(f"Impossibile leggere il portafoglio Kraken: {exc}")
 
 trade_attivi = sum(api_open_position_counts.values())
+budget_totale_allocato = TRADE_AMOUNT_EUR * trade_attivi
 
 col1, col2, col3, col4 = st.columns(4)
-col1.metric("Capitale Attuale", f"{round(capitale_attuale, 2)} EUR", f"{round(profitto_totale, 2)} EUR totale")
-col2.metric("Target Obiettivo (x2)", f"{capitale_iniziale * 2} EUR")
-col3.metric("Posizioni Aperte", f"{trade_attivi}")
-col4.metric(
-    "Win Rate",
-    f"{round((trade_vincenti / (trade_vincenti + trade_perdenti) * 100), 1) if (trade_vincenti + trade_perdenti) > 0 else 0.0} %",
-)
+col1.metric("Valore Portafoglio", f"{round(capitale_attuale, 2)} EUR", f"{round(profitto_totale, 2)} EUR totale")
+col2.metric("Budget per Posizione", f"{TRADE_AMOUNT_EUR} EUR")
+col3.metric("Guadagni Stimati", f"{round(profitto_totale, 2)} EUR")
+col4.metric("Posizioni Aperte", f"{trade_attivi}", f"{round(budget_totale_allocato, 2)} EUR allocati")
+
+win_rate = round((trade_vincenti / (trade_vincenti + trade_perdenti) * 100), 1) if (trade_vincenti + trade_perdenti) > 0 else 0.0
+st.caption(f"Win Rate: {win_rate} %")
 
 st.markdown("---")
 
@@ -196,6 +254,13 @@ saldo_col1, saldo_col2, saldo_col3 = st.columns(3)
 saldo_col1.metric("EUR Free", f"{round(balance_snapshot['free_eur'], 2)} EUR")
 saldo_col2.metric("EUR Locked", f"{round(balance_snapshot['used_eur'], 2)} EUR")
 saldo_col3.metric("EUR Total", f"{round(balance_snapshot['total_eur'], 2)} EUR")
+
+st.markdown("**Saldo per valuta:**")
+currency_df = build_currency_table(balance_snapshot)
+if currency_df.empty:
+    st.info("Nessuna valuta aggiuntiva rilevata nel wallet.")
+else:
+    st.dataframe(currency_df, use_container_width=True, hide_index=True)
 
 st.markdown("**Posizioni Aperte da API:**")
 positions_df = build_positions_table()
@@ -233,7 +298,7 @@ with col_right:
 
     st.markdown(
         "**Gestione Rischio:**\n"
-        "- Budget per Trade: 20 EUR\n"
+        f"- Budget per Trade: {TRADE_AMOUNT_EUR} EUR\n"
         "- Leva Finanziaria: 3x\n"
         "- Stop Loss fisso: -2%\n"
         "- Take Profit fisso: +4%"
