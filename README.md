@@ -46,6 +46,8 @@ Optional:
 - `NEWS_FEEDS` to override the default RSS sources, comma-separated
 - `NEWS_SENTIMENT_MODEL=ProsusAI/finbert` to request a Hugging Face model if available
 
+By default the bot uses a fixed budget of `100 EUR` per position, and the dashboard shows the EUR balance plus the other currencies found in the wallet snapshot.
+
 ## GCP setup
 
 1. Create a bucket for trade history.
