@@ -2,12 +2,15 @@ import pandas as pd
 import streamlit as st
 
 from market import (
-    CRYPTO_TARGETS,
+    CORE_CRYPTO_TARGETS,
     TIMEFRAME,
     TRADE_AMOUNT_EUR,
+    get_all_candidate_symbols,
     get_balance_snapshot,
     get_market_data,
     get_open_positions,
+    is_positive_trend,
+    is_dynamic_crypto_enabled,
 )
 from news_monitor import analyze_symbol_news, get_news_block_buys_enabled, get_news_monitor_enabled
 from storage import empty_trade_history, load_trade_history
@@ -36,7 +39,7 @@ def fetch_balance_snapshot() -> dict[str, object]:
 @st.cache_data(ttl=30)
 def fetch_positions_snapshot() -> dict[str, object]:
     open_positions = get_open_positions()
-    open_position_counts = {symbol: 0 for symbol in CRYPTO_TARGETS}
+    open_position_counts = {symbol: 0 for symbol in get_all_candidate_symbols()}
 
     for position in open_positions:
         symbol = position.get("symbol")
@@ -81,7 +84,7 @@ try:
     api_open_position_counts = positions_snapshot["open_position_counts"]
     api_open_positions = positions_snapshot["open_positions"]
 except Exception as exc:
-    api_open_position_counts = {symbol: 0 for symbol in CRYPTO_TARGETS}
+    api_open_position_counts = {symbol: 0 for symbol in get_all_candidate_symbols()}
     api_open_positions = []
     st.warning(f"Impossibile leggere le posizioni aperte da Kraken: {exc}")
 
@@ -93,15 +96,19 @@ def fetch_market_snapshot(symbol: str) -> dict[str, object]:
     current_price = last_row["close"]
     news_snapshot = analyze_symbol_news(symbol)
     news_label = news_snapshot["label"]
+    trend_positive = is_positive_trend(market_df)
     signal = (
         "BUY"
-        if last_row["RSI"] < 40 and (current_price > last_row["EMA_9"] or (current_price >= last_row["EMA_9"] and news_label == 'POSITIVE'))
+        if trend_positive
+        and last_row["RSI"] < 40
+        and (current_price > last_row["EMA_9"] or (current_price >= last_row["EMA_9"] and news_label == "POSITIVE"))
         else "WAIT"
     )
     return {
         "Last Price": round(float(last_row["close"]), 4),
         "RSI": round(float(last_row["RSI"]), 2),
         "EMA 9": round(float(last_row["EMA_9"]), 4),
+        "Trend": "UP" if trend_positive else "DOWN",
         "Signal": signal,
     }
 
@@ -109,12 +116,13 @@ def fetch_market_snapshot(symbol: str) -> dict[str, object]:
 def build_monitored_crypto_table() -> pd.DataFrame:
     rows = []
 
-    for symbol in CRYPTO_TARGETS:
+    for symbol in get_all_candidate_symbols():
         try:
             snapshot = fetch_market_snapshot(symbol)
             rows.append(
                 {
                     "Symbol": symbol,
+                    "Core": "Yes" if symbol in CORE_CRYPTO_TARGETS else "Trending",
                     **snapshot,
                     "Open Trades": api_open_position_counts.get(symbol, 0),
                 }
@@ -123,9 +131,11 @@ def build_monitored_crypto_table() -> pd.DataFrame:
             rows.append(
                 {
                     "Symbol": symbol,
+                    "Core": "Yes" if symbol in CORE_CRYPTO_TARGETS else "Trending",
                     "Last Price": "N/A",
                     "RSI": "N/A",
                     "EMA 9": "N/A",
+                    "Trend": "N/A",
                     "Signal": f"Error: {exc}",
                     "Open Trades": api_open_position_counts.get(symbol, 0),
                 }
@@ -149,7 +159,7 @@ def fetch_news_snapshot(symbol: str) -> dict[str, object]:
 
 def build_news_table() -> pd.DataFrame:
     rows = []
-    for symbol in CRYPTO_TARGETS:
+    for symbol in get_all_candidate_symbols():
         try:
             rows.append({"Symbol": symbol, **fetch_news_snapshot(symbol)})
         except Exception as exc:
@@ -280,9 +290,11 @@ with col_left:
 with col_right:
     st.subheader("Stato e Configurazione Bot")
     st.success("Bot online e connesso a Kraken API")
-    st.info(f"Strategia: RSI (<40) + incrocio EMA 9\nTimeframe: {TIMEFRAME}")
+    st.info(f"Strategia: RSI (<40) + incrocio EMA 9 + trend positivo\nTimeframe: {TIMEFRAME}")
 
+    dynamic_status = "attivo" if is_dynamic_crypto_enabled() else "disattivo"
     st.markdown("**Asset Monitorati:**")
+    st.caption(f"Lista core + trending CoinGecko (discovery dinamico {dynamic_status}).")
     monitored_df = build_monitored_crypto_table()
     st.dataframe(monitored_df, use_container_width=True, hide_index=True)
 
@@ -300,6 +312,7 @@ with col_right:
         "**Gestione Rischio:**\n"
         f"- Budget per Trade: {TRADE_AMOUNT_EUR} EUR\n"
         "- Leva Finanziaria: 3x\n"
-        "- Stop Loss fisso: -2%\n"
-        "- Take Profit fisso: +4%"
+        "- Stop Loss / Take Profit adattivi in base alla volatilita (ATR)\n"
+        "- Asset poco volatili: SL ~-1% / TP ~+2.5%\n"
+        "- Asset molto volatili: SL/TP piu ampi"
     )

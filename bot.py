@@ -5,16 +5,21 @@ import pandas as pd
 
 from app_config import get_bool_env, get_env
 from market import (
-    CRYPTO_TARGETS,
+    DEFAULT_STOP_LOSS_MULTIPLIER,
+    DEFAULT_TAKE_PROFIT_MULTIPLIER,
     LEVERAGE,
     MAX_CONCURRENT_TRADES,
     TRADE_AMOUNT_EUR,
     get_account_balance,
+    get_all_candidate_symbols,
     get_exchange,
+    get_risk_multipliers,
+    get_volatility_pct,
     has_open_position,
     get_open_position_counts,
     get_open_positions_count,
     get_market_data,
+    is_positive_trend,
 )
 from notifications import send_telegram_message
 from news_monitor import analyze_symbol_news, get_news_block_buys_enabled, get_news_negative_threshold
@@ -24,8 +29,6 @@ MODALITA_PROVA = get_bool_env("MODALITA_PROVA", False)
 SOGLIA_PRELIEVO_EUR = float(get_env("SOGLIA_PRELIEVO_EUR", default="200"))
 NOME_CONTO_KRAKEN = get_env("KRAKEN_WITHDRAWAL_ACCOUNT", default="revolut")
 
-DEFAULT_STOP_LOSS_MULTIPLIER = 0.98
-DEFAULT_TAKE_PROFIT_MULTIPLIER = 1.04
 SYMBOL_RISK_MULTIPLIERS = {
     "XRP/EUR": {
         "stop_loss": 0.85,
@@ -34,10 +37,16 @@ SYMBOL_RISK_MULTIPLIERS = {
 }
 
 
-def get_risk_levels(symbol: str, current_price: float) -> tuple[float, float]:
+def get_risk_levels(symbol: str, current_price: float, volatility_pct: float | None = None) -> tuple[float, float]:
     multipliers = SYMBOL_RISK_MULTIPLIERS.get(symbol, {})
-    stop_loss_multiplier = multipliers.get("stop_loss", DEFAULT_STOP_LOSS_MULTIPLIER)
-    take_profit_multiplier = multipliers.get("take_profit", DEFAULT_TAKE_PROFIT_MULTIPLIER)
+    if multipliers:
+        stop_loss_multiplier = multipliers.get("stop_loss", DEFAULT_STOP_LOSS_MULTIPLIER)
+        take_profit_multiplier = multipliers.get("take_profit", DEFAULT_TAKE_PROFIT_MULTIPLIER)
+    elif volatility_pct is not None:
+        stop_loss_multiplier, take_profit_multiplier = get_risk_multipliers(volatility_pct)
+    else:
+        stop_loss_multiplier = DEFAULT_STOP_LOSS_MULTIPLIER
+        take_profit_multiplier = DEFAULT_TAKE_PROFIT_MULTIPLIER
     return current_price * stop_loss_multiplier, current_price * take_profit_multiplier
 
 
@@ -161,10 +170,48 @@ def _place_protection_order(
     )
 
 
+def _is_protection_order(order: dict) -> bool:
+    if str(order.get("side", "")).lower() != "sell":
+        return False
+
+    if order.get("stopLossPrice") or order.get("takeProfitPrice"):
+        return True
+
+    info = order.get("info") or {}
+    descr = info.get("descr") if isinstance(info.get("descr"), dict) else {}
+    ordertype = str(descr.get("ordertype") or info.get("ordertype") or order.get("type") or "").lower()
+    return "stop" in ordertype or "take-profit" in ordertype or "take_profit" in ordertype
+
+
+def cancel_existing_protection_orders(exchange, symbol: str) -> int:
+    cancelled = 0
+
+    try:
+        open_orders = exchange.fetch_open_orders(symbol)
+    except Exception as exc:
+        print(f"Impossibile leggere gli ordini aperti su {symbol}: {exc}")
+        return 0
+
+    for order in open_orders:
+        if not _is_protection_order(order):
+            continue
+        try:
+            exchange.cancel_order(order["id"], symbol)
+            cancelled += 1
+        except Exception as exc:
+            print(f"Impossibile cancellare l'ordine di protezione {order.get('id')} su {symbol}: {exc}")
+
+    return cancelled
+
+
 def place_stop_loss_and_take_profit(exchange, symbol: str, amount: float, stop_loss: float, take_profit: float) -> None:
     # Kraken is stricter with trigger orders than the generic CCXT interface.
     # We use limit-based protection orders with an explicit trigger price and a
     # slightly more aggressive limit price to improve fill reliability.
+    removed = cancel_existing_protection_orders(exchange, symbol)
+    if removed:
+        print(f"Rimossi {removed} ordini di protezione duplicati su {symbol}.")
+
     sl_limit = stop_loss * 0.999
     tp_limit = take_profit * 0.999
 
@@ -186,8 +233,16 @@ def check_signals() -> None:
         print(f"Raggiunto il limite massimo di trade contemporanei ({active_count}/{MAX_CONCURRENT_TRADES}). Salto l'analisi.")
         return
 
-    for symbol in CRYPTO_TARGETS:
+    trading_targets = get_all_candidate_symbols()
+    print(f"Asset candidati: {', '.join(trading_targets)}")
+
+    for symbol in trading_targets:
         try:
+            df = get_market_data(symbol)
+            if not is_positive_trend(df):
+                print(f"{symbol} escluso: trend non positivo.")
+                continue
+
             news_snapshot = analyze_symbol_news(symbol)
             news_label = news_snapshot["label"]
             news_score = float(news_snapshot["score"])
@@ -204,7 +259,6 @@ def check_signals() -> None:
                 print(f"Protezione rifiutata nelle ultime 24 ore per {symbol}. Salto il trade per evitare retry continui.")
                 continue
 
-            df = get_market_data(symbol)
             last_row = df.iloc[-1]
             current_price = last_row["close"]
 
@@ -216,7 +270,10 @@ def check_signals() -> None:
                 exchange = get_exchange()
                 amount_to_buy = float(exchange.amount_to_precision(symbol, amount_to_buy))
 
-                stop_loss, take_profit = get_risk_levels(symbol, current_price)
+                volatility_pct = get_volatility_pct(df)
+                stop_loss, take_profit = get_risk_levels(symbol, current_price, volatility_pct)
+                sl_pct = round((stop_loss / current_price - 1) * 100, 2)
+                tp_pct = round((take_profit / current_price - 1) * 100, 2)
                 if MODALITA_PROVA:
                     entry_price = current_price
                     log_trade_to_csv(symbol, "BUY", amount_to_buy, entry_price, stop_loss, take_profit)
@@ -226,7 +283,8 @@ def check_signals() -> None:
                         f"Asset: `{symbol}`\n"
                         f"Quantita: {amount_to_buy}\n"
                         f"Prezzo ingresso: {round(entry_price, 4)} EUR\n"
-                        f"SL: {round(stop_loss, 4)} EUR | TP: {round(take_profit, 4)} EUR"
+                        f"SL: {round(stop_loss, 4)} EUR ({sl_pct}%) | TP: {round(take_profit, 4)} EUR ({tp_pct}%)\n"
+                        f"Volatilita ATR: {round(volatility_pct, 2)}%"
                     )
                     if news_label in {"POSITIVE", "NEGATIVE"}:
                         msg += f"\nSentiment news: {news_label} ({round(news_score, 2)})"
@@ -247,8 +305,9 @@ def check_signals() -> None:
                         f"Asset: `{symbol}`\n"
                         f"Quantita: {amount_to_buy}\n"
                         f"Prezzo ingresso: {round(entry_price, 4)} EUR\n"
-                        f"Stop Loss: {round(stop_loss, 4)} EUR\n"
-                        f"Take Profit: {round(take_profit, 4)} EUR"
+                        f"Stop Loss: {round(stop_loss, 4)} EUR ({sl_pct}%)\n"
+                        f"Take Profit: {round(take_profit, 4)} EUR ({tp_pct}%)\n"
+                        f"Volatilita ATR: {round(volatility_pct, 2)}%"
                     )
                     if news_label in {"POSITIVE", "NEGATIVE"}:
                         msg += f"\nSentiment news: {news_label} ({round(news_score, 2)})"

@@ -15,7 +15,7 @@ from app_config import (
     get_trade_history_object_name,
     get_trade_history_source,
 )
-from market import CRYPTO_TARGETS, get_exchange
+from market import get_all_candidate_symbols, get_exchange
 
 TRADE_COLUMNS = [
     "source",
@@ -123,7 +123,7 @@ def _load_api_history() -> pd.DataFrame:
 
     rows: list[dict] = []
 
-    for symbol in CRYPTO_TARGETS:
+    for symbol in get_all_candidate_symbols():
         try:
             trades = exchange.fetch_my_trades(symbol=symbol, since=since_ms, limit=limit)
         except Exception:

@@ -15,6 +15,7 @@ DEFAULT_NEWS_FEEDS = (
 )
 
 SYMBOL_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "BTC/EUR": ("btc", "bitcoin", "xbt"),
     "SOL/EUR": ("sol", "solana"),
     "XRP/EUR": ("xrp", "ripple"),
     "LINK/EUR": ("link", "chainlink"),
