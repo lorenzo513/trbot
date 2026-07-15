@@ -1,9 +1,9 @@
 import datetime
-from threading import Event
 
 import pandas as pd
 
 from app_config import get_bool_env, get_env
+from dashboard_snapshot import publish_dashboard_snapshot
 from market import (
     DEFAULT_STOP_LOSS_MULTIPLIER,
     DEFAULT_TAKE_PROFIT_MULTIPLIER,
@@ -11,19 +11,12 @@ from market import (
     MAX_CONCURRENT_TRADES,
     TRADE_AMOUNT_EUR,
     get_account_balance,
-    get_all_candidate_symbols,
     get_exchange,
     get_risk_multipliers,
-    get_volatility_pct,
     has_open_position,
-    get_open_position_counts,
-    get_open_positions_count,
-    get_market_data,
-    is_positive_trend,
 )
-from dashboard_snapshot import publish_dashboard_snapshot
 from notifications import send_telegram_message
-from news_monitor import analyze_symbol_news, get_news_block_buys_enabled, get_news_negative_threshold
+from news_monitor import get_news_block_buys_enabled, get_news_negative_threshold
 from storage import append_trade_row, ensure_trade_history, has_recent_event, log_protection_rejection
 
 MODALITA_PROVA = get_bool_env("MODALITA_PROVA", False)
@@ -77,7 +70,7 @@ def controlla_e_preleva_profitti() -> None:
                 params={},
             )
 
-            log_trade_to_csv("EUR", "WITHDRAW", cifra_da_prelevare, current_price=1.0)
+            log_trade_to_csv("EUR", "WITHDRAW", cifra_da_prelevare, price=1.0)
 
             send_telegram_message(
                 f"Prelievo inviato con successo. {round(cifra_da_prelevare, 2)} EUR sono in viaggio verso il tuo conto. ID transazione: {response['id']}"
@@ -132,6 +125,8 @@ def get_trade_amount(
         if eur_disponibili is None:
             eur_disponibili = get_account_balance()
         if trade_attivi is None:
+            from market import get_open_positions_count
+
             trade_attivi = get_open_positions_count()
         slot_disponibili = MAX_CONCURRENT_TRADES - trade_attivi
 
@@ -214,9 +209,6 @@ def cancel_existing_protection_orders(exchange, symbol: str) -> int:
 
 
 def place_stop_loss_and_take_profit(exchange, symbol: str, amount: float, stop_loss: float, take_profit: float) -> None:
-    # Kraken is stricter with trigger orders than the generic CCXT interface.
-    # We use limit-based protection orders with an explicit trigger price and a
-    # slightly more aggressive limit price to improve fill reliability.
     removed = cancel_existing_protection_orders(exchange, symbol)
     if removed:
         print(f"Rimossi {removed} ordini di protezione duplicati su {symbol}.")
@@ -228,42 +220,161 @@ def place_stop_loss_and_take_profit(exchange, symbol: str, amount: float, stop_l
     _place_protection_order(exchange, symbol, amount, "take-profit-limit", take_profit, tp_limit)
 
 
-def check_signals() -> None:
-    print(f"[{pd.Timestamp.now().strftime('%H:%M:%S')}] Analisi di mercato in corso...")
+def _format_buy_message(
+    *,
+    simulated: bool,
+    symbol: str,
+    amount_to_buy: float,
+    entry_price: float,
+    stop_loss: float,
+    take_profit: float,
+    sl_pct: float,
+    tp_pct: float,
+    volatility_pct: float,
+    news_label: str,
+    news_score: float,
+) -> str:
+    header = "[SIMULAZIONE] ORDINE COMPRA" if simulated else "ORDINE COMPRA ESEGUITO"
+    sl_label = "SL" if simulated else "Stop Loss"
+    tp_label = "TP" if simulated else "Take Profit"
+    sl_tp_join = " | " if simulated else "\n"
+
+    msg = (
+        f"{header}\n"
+        f"Asset: `{symbol}`\n"
+        f"Quantita: {amount_to_buy}\n"
+        f"Prezzo ingresso: {round(entry_price, 4)} EUR\n"
+        f"{sl_label}: {round(stop_loss, 4)} EUR ({sl_pct}%){sl_tp_join}"
+        f"{tp_label}: {round(take_profit, 4)} EUR ({tp_pct}%)\n"
+        f"Volatilita ATR: {round(volatility_pct, 2)}%"
+    )
+    if news_label in {"POSITIVE", "NEGATIVE"}:
+        msg += f"\nSentiment news: {news_label} ({round(news_score, 2)})"
+    return msg
+
+
+def _execute_buy(
+    symbol: str,
+    symbol_data: dict[str, object],
+    *,
+    eur_disponibili: float | None,
+    slots_used: int,
+    open_position_counts: dict[str, int],
+) -> tuple[int, float | None]:
+    current_price = float(symbol_data["last_price"])
+    news_label = str(symbol_data.get("sentiment", "NEUTRAL"))
+    news_score = float(symbol_data.get("score", 0.0))
+    volatility_pct = float(symbol_data.get("volatility_pct", 0.0))
+
+    amount_to_buy = get_trade_amount(eur_disponibili=eur_disponibili, trade_attivi=slots_used) / current_price
+    if amount_to_buy <= 0:
+        return slots_used, eur_disponibili
+
+    exchange = get_exchange()
+    amount_to_buy = float(exchange.amount_to_precision(symbol, amount_to_buy))
+    stop_loss, take_profit = get_risk_levels(symbol, current_price, volatility_pct)
+    sl_pct = round((stop_loss / current_price - 1) * 100, 2)
+    tp_pct = round((take_profit / current_price - 1) * 100, 2)
+
+    if MODALITA_PROVA:
+        log_trade_to_csv(symbol, "BUY", amount_to_buy, current_price, stop_loss, take_profit)
+        send_telegram_message(
+            _format_buy_message(
+                simulated=True,
+                symbol=symbol,
+                amount_to_buy=amount_to_buy,
+                entry_price=current_price,
+                stop_loss=stop_loss,
+                take_profit=take_profit,
+                sl_pct=sl_pct,
+                tp_pct=tp_pct,
+                volatility_pct=volatility_pct,
+                news_label=news_label,
+                news_score=news_score,
+            )
+        )
+        open_position_counts[symbol] = open_position_counts.get(symbol, 0) + 1
+        return slots_used + 1, eur_disponibili
+
+    order = exchange.create_market_buy_order(
+        symbol=symbol,
+        amount=amount_to_buy,
+        params={"leverage": str(LEVERAGE) if symbol != "DOGE/EUR" else "1"},
+    )
+    entry_price = order.get("price", current_price) if order.get("price") else current_price
+    log_trade_to_csv(symbol, "BUY", amount_to_buy, entry_price, stop_loss, take_profit, order_id=order.get("id"))
+    send_telegram_message(
+        _format_buy_message(
+            simulated=False,
+            symbol=symbol,
+            amount_to_buy=amount_to_buy,
+            entry_price=float(entry_price),
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+            sl_pct=sl_pct,
+            tp_pct=tp_pct,
+            volatility_pct=volatility_pct,
+            news_label=news_label,
+            news_score=news_score,
+        )
+    )
+
+    open_position_counts[symbol] = open_position_counts.get(symbol, 0) + 1
+    updated_eur = max(0.0, eur_disponibili - TRADE_AMOUNT_EUR) if eur_disponibili is not None else eur_disponibili
 
     try:
-        open_position_counts = get_open_position_counts()
-        active_count = sum(open_position_counts.values())
+        filled_amount = float(order.get("filled") or amount_to_buy)
+        place_stop_loss_and_take_profit(exchange, symbol, filled_amount, stop_loss, take_profit)
+        send_telegram_message("Protezioni attivate. Stop Loss e Take Profit impostati correttamente su Kraken.")
     except Exception as exc:
-        print(f"Errore nel recupero delle posizioni aperte da Kraken: {exc}")
-        return
+        log_protection_rejection(symbol, str(exc), amount_to_buy, float(entry_price))
+        send_telegram_message(f"Ordine eseguito ma errore nel piazzare SL/TP automatici: {exc}")
 
+    return slots_used + 1, updated_eur
+
+
+def check_signals(snapshot: dict[str, object]) -> None:
+    print(f"[{pd.Timestamp.now().strftime('%H:%M:%S')}] Valutazione segnali di trading...")
+
+    positions = snapshot.get("positions", {})
+    open_position_counts = dict(positions.get("open_position_counts", {})) if isinstance(positions, dict) else {}
+    symbols_data = snapshot.get("symbols", {}) if isinstance(snapshot.get("symbols"), dict) else {}
+    candidate_symbols = snapshot.get("candidate_symbols", [])
+    if not isinstance(candidate_symbols, list):
+        candidate_symbols = list(symbols_data.keys())
+
+    active_count = sum(int(value or 0) for value in open_position_counts.values())
     if active_count >= MAX_CONCURRENT_TRADES:
-        print(f"Raggiunto il limite massimo di trade contemporanei ({active_count}/{MAX_CONCURRENT_TRADES}). Salto l'analisi.")
+        print(
+            f"Raggiunto il limite massimo di trade contemporanei ({active_count}/{MAX_CONCURRENT_TRADES}). Salto i nuovi ingressi."
+        )
         return
 
-    eur_disponibili = TRADE_AMOUNT_EUR if MODALITA_PROVA else get_account_balance()
+    balance = snapshot.get("balance", {}) if isinstance(snapshot.get("balance"), dict) else {}
+    eur_disponibili = TRADE_AMOUNT_EUR if MODALITA_PROVA else float(balance.get("free_eur", 0.0) or 0.0)
     slots_used = active_count
+    news_threshold = get_news_negative_threshold()
 
-    trading_targets = get_all_candidate_symbols()
-    print(f"Asset candidati: {', '.join(trading_targets)}")
-
-    for symbol in trading_targets:
+    for symbol in candidate_symbols:
         if slots_used >= MAX_CONCURRENT_TRADES:
-            print(f"Raggiunto il limite massimo di trade contemporanei ({slots_used}/{MAX_CONCURRENT_TRADES}). Interrompo la scansione.")
+            print(
+                f"Raggiunto il limite massimo di trade contemporanei ({slots_used}/{MAX_CONCURRENT_TRADES}). Interrompo la scansione."
+            )
             break
 
+        symbol_data = symbols_data.get(symbol)
+        if not isinstance(symbol_data, dict):
+            continue
+
         try:
-            df = get_market_data(symbol)
-            if not is_positive_trend(df):
+            if symbol_data.get("trend") != "UP":
                 print(f"{symbol} escluso: trend non positivo.")
                 continue
 
-            news_snapshot = analyze_symbol_news(symbol)
-            news_label = news_snapshot["label"]
-            news_score = float(news_snapshot["score"])
+            news_label = str(symbol_data.get("sentiment", "NO_DATA"))
+            news_score = float(symbol_data.get("score", 0.0))
 
-            if get_news_block_buys_enabled() and news_label == "NEGATIVE" and news_score <= get_news_negative_threshold():
+            if get_news_block_buys_enabled() and news_label == "NEGATIVE" and news_score <= news_threshold:
                 print(f"Filtro news attivo: {symbol} bloccato da sentiment negativo ({news_score:.2f}).")
                 continue
 
@@ -275,77 +386,16 @@ def check_signals() -> None:
                 print(f"Protezione rifiutata nelle ultime 24 ore per {symbol}. Salto il trade per evitare retry continui.")
                 continue
 
-            last_row = df.iloc[-1]
-            current_price = last_row["close"]
+            if symbol_data.get("signal") != "BUY":
+                continue
 
-            if last_row["RSI"] < 40 and (current_price > last_row["EMA_9"] or (current_price >= last_row["EMA_9"] and news_label == 'POSITIVE')):
-                amount_to_buy = get_trade_amount(eur_disponibili=eur_disponibili, trade_attivi=slots_used) / current_price
-                if amount_to_buy <= 0:
-                    continue
-
-                exchange = get_exchange()
-                amount_to_buy = float(exchange.amount_to_precision(symbol, amount_to_buy))
-
-                volatility_pct = get_volatility_pct(df)
-                stop_loss, take_profit = get_risk_levels(symbol, current_price, volatility_pct)
-                sl_pct = round((stop_loss / current_price - 1) * 100, 2)
-                tp_pct = round((take_profit / current_price - 1) * 100, 2)
-                if MODALITA_PROVA:
-                    entry_price = current_price
-                    log_trade_to_csv(symbol, "BUY", amount_to_buy, entry_price, stop_loss, take_profit)
-                    slots_used += 1
-                    open_position_counts[symbol] = open_position_counts.get(symbol, 0) + 1
-
-                    msg = (
-                        f"[SIMULAZIONE] ORDINE COMPRA\n"
-                        f"Asset: `{symbol}`\n"
-                        f"Quantita: {amount_to_buy}\n"
-                        f"Prezzo ingresso: {round(entry_price, 4)} EUR\n"
-                        f"SL: {round(stop_loss, 4)} EUR ({sl_pct}%) | TP: {round(take_profit, 4)} EUR ({tp_pct}%)\n"
-                        f"Volatilita ATR: {round(volatility_pct, 2)}%"
-                    )
-                    if news_label in {"POSITIVE", "NEGATIVE"}:
-                        msg += f"\nSentiment news: {news_label} ({round(news_score, 2)})"
-                    send_telegram_message(msg)
-                else:
-                    order = exchange.create_market_buy_order(
-                        symbol=symbol,
-                        amount=amount_to_buy,
-                        params={"leverage": str(LEVERAGE) if symbol != "DOGE/EUR" else "1"},
-                    )
-                    entry_price = order.get("price", current_price) if order.get("price") else current_price
-                    order_id = order.get("id")
-
-                    log_trade_to_csv(symbol, "BUY", amount_to_buy, entry_price, stop_loss, take_profit, order_id=order_id)
-
-                    msg = (
-                        f"ORDINE COMPRA ESEGUITO\n"
-                        f"Asset: `{symbol}`\n"
-                        f"Quantita: {amount_to_buy}\n"
-                        f"Prezzo ingresso: {round(entry_price, 4)} EUR\n"
-                        f"Stop Loss: {round(stop_loss, 4)} EUR ({sl_pct}%)\n"
-                        f"Take Profit: {round(take_profit, 4)} EUR ({tp_pct}%)\n"
-                        f"Volatilita ATR: {round(volatility_pct, 2)}%"
-                    )
-                    if news_label in {"POSITIVE", "NEGATIVE"}:
-                        msg += f"\nSentiment news: {news_label} ({round(news_score, 2)})"
-                    send_telegram_message(msg)
-
-                    slots_used += 1
-                    open_position_counts[symbol] = open_position_counts.get(symbol, 0) + 1
-                    if eur_disponibili is not None:
-                        eur_disponibili = max(0.0, eur_disponibili - TRADE_AMOUNT_EUR)
-
-                    try:
-                        filled_amount = float(order.get("filled") or amount_to_buy)
-                        place_stop_loss_and_take_profit(exchange, symbol, filled_amount, stop_loss, take_profit)
-                        send_telegram_message("Protezioni attivate. Stop Loss e Take Profit impostati correttamente su Kraken.")
-                    except Exception as exc:
-                        log_protection_rejection(symbol, str(exc), amount_to_buy, entry_price)
-                        send_telegram_message(
-                            f"Ordine eseguito ma errore nel piazzare SL/TP automatici: {exc}"
-                        )
-
+            slots_used, eur_disponibili = _execute_buy(
+                symbol,
+                symbol_data,
+                eur_disponibili=eur_disponibili,
+                slots_used=slots_used,
+                open_position_counts=open_position_counts,
+            )
         except Exception as exc:
             print(f"Errore durante l'analisi o l'ordine su {symbol}: {exc}")
 
@@ -353,16 +403,17 @@ def check_signals() -> None:
 def run_bot() -> None:
     ensure_trade_history()
 
-    ultimo_controllo_prelievo = None
-    check_signals()
-
+    snapshot: dict[str, object] = {}
     try:
-        publish_dashboard_snapshot()
+        snapshot = publish_dashboard_snapshot()
     except Exception as exc:
         print(f"Errore durante la pubblicazione dello snapshot dashboard: {exc}")
 
+    if snapshot:
+        check_signals(snapshot)
+
     ora_attuale = datetime.datetime.now()
-    if ora_attuale.hour == 23 and ultimo_controllo_prelievo != ora_attuale.date():
+    if ora_attuale.hour == 23:
         controlla_e_preleva_profitti()
 
 

@@ -178,6 +178,22 @@ def is_positive_trend(df: pd.DataFrame) -> bool:
     return price_change > 0
 
 
+def compute_trade_signal(
+    rsi: float,
+    current_price: float,
+    ema_9: float,
+    trend_positive: bool,
+    news_label: str,
+) -> str:
+    if (
+        trend_positive
+        and rsi < 40
+        and (current_price > ema_9 or (current_price >= ema_9 and news_label == "POSITIVE"))
+    ):
+        return "BUY"
+    return "WAIT"
+
+
 def get_volatility_pct(df: pd.DataFrame) -> float:
     last_row = df.iloc[-1]
     close = float(last_row["close"])
@@ -203,22 +219,6 @@ def get_market_data(symbol: str) -> pd.DataFrame:
     df["EMA_9"] = _ema(df["close"], length=9)
     df["ATR"] = _atr(df, length=14)
     return df
-
-
-def get_active_trading_targets() -> list[str]:
-    active: list[str] = []
-
-    for symbol in get_all_candidate_symbols():
-        try:
-            df = get_market_data(symbol)
-            if is_positive_trend(df):
-                active.append(symbol)
-            else:
-                print(f"{symbol} escluso: trend non positivo.")
-        except Exception as exc:
-            print(f"Impossibile valutare il trend di {symbol}: {exc}")
-
-    return active
 
 
 def get_account_balance() -> float:
@@ -258,9 +258,12 @@ def get_open_positions() -> list[dict]:
     return open_positions
 
 
-def get_open_position_counts() -> dict[str, int]:
+def get_open_position_counts(positions: list[dict] | None = None) -> dict[str, int]:
     counts = {symbol: 0 for symbol in get_all_candidate_symbols()}
-    for position in get_open_positions():
+    if positions is None:
+        positions = get_open_positions()
+
+    for position in positions:
         symbol = _normalize_symbol(position.get("symbol"))
         if symbol in counts:
             counts[symbol] += 1

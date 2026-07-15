@@ -61,7 +61,6 @@ NEGATIVE_WORDS = {
     "investigation",
     "hack",
     "hackers",
-    "lawsuit",
     "rejection",
     "ban",
     "negative",
@@ -500,7 +499,7 @@ def _build_cache_response(
     return response
 
 
-def analyze_symbol_news(symbol: str, limit: int = 8) -> dict[str, object]:
+def analyze_symbol_news(symbol: str, limit: int = 8, *, persist: bool = True) -> dict[str, object]:
     _ensure_sentiment_cache_loaded()
 
     now = time.time()
@@ -536,5 +535,11 @@ def analyze_symbol_news(symbol: str, limit: int = 8) -> dict[str, object]:
     print(f"[News] Sentiment {symbol} calcolato: {result['label']} ({float(result['score']):.2f})")
 
     _sentiment_cache[symbol] = (now, result)
-    _save_sentiment_document()
+    if persist:
+        _save_sentiment_document()
     return result
+
+
+def flush_sentiment_cache() -> None:
+    if _sentiment_cache:
+        _save_sentiment_document()

@@ -76,16 +76,23 @@ TRADE_AMOUNT_EUR = float(config.get("trade_amount_eur", 22.0))
 LEVERAGE = config.get("leverage", 4)
 
 
-def build_monitored_crypto_table() -> pd.DataFrame:
-    rows = []
+def _iter_symbol_rows(snapshot: dict[str, object], symbols_snapshot: dict[str, object]) -> list[tuple[str, dict[str, object]]]:
     candidate_symbols = snapshot.get("candidate_symbols", [])
     if not isinstance(candidate_symbols, list):
         candidate_symbols = list(symbols_snapshot.keys())
 
+    rows: list[tuple[str, dict[str, object]]] = []
     for symbol in candidate_symbols:
         symbol_data = symbols_snapshot.get(symbol, {})
         if not isinstance(symbol_data, dict):
             symbol_data = {}
+        rows.append((symbol, symbol_data))
+    return rows
+
+
+def build_monitored_crypto_table() -> pd.DataFrame:
+    rows = []
+    for symbol, symbol_data in _iter_symbol_rows(snapshot, symbols_snapshot):
         rows.append(
             {
                 "Symbol": symbol,
@@ -106,14 +113,7 @@ def build_monitored_crypto_table() -> pd.DataFrame:
 
 def build_news_table() -> pd.DataFrame:
     rows = []
-    candidate_symbols = snapshot.get("candidate_symbols", [])
-    if not isinstance(candidate_symbols, list):
-        candidate_symbols = list(symbols_snapshot.keys())
-
-    for symbol in candidate_symbols:
-        symbol_data = symbols_snapshot.get(symbol, {})
-        if not isinstance(symbol_data, dict):
-            symbol_data = {}
+    for symbol, symbol_data in _iter_symbol_rows(snapshot, symbols_snapshot):
         rows.append(
             {
                 "Symbol": symbol,
