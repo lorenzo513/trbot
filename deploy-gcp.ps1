@@ -166,7 +166,7 @@ if ($LASTEXITCODE -ne 0) {
 $dashboardImage = Build-Image -Dockerfile "Dockerfile.dashboard" -ImageName $DashboardImageName
 $botImage = Build-Image -Dockerfile "Dockerfile.bot" -ImageName $BotImageName
 
-$dashboardSecrets = "KRAKEN_API_KEY=kraken-api-key:latest,KRAKEN_SECRET=kraken-secret:latest,STREAMLIT_AUTH_USERNAME=streamlit-auth-username:latest,STREAMLIT_AUTH_PASSWORD_HASH=streamlit-auth-password-hash:latest,STREAMLIT_COOKIE_SECRET=streamlit-cookie-secret:latest"
+$dashboardSecrets = "STREAMLIT_AUTH_USERNAME=streamlit-auth-username:latest,STREAMLIT_AUTH_PASSWORD_HASH=streamlit-auth-password-hash:latest,STREAMLIT_COOKIE_SECRET=streamlit-cookie-secret:latest"
 
 & gcloud run deploy $DashboardServiceName `
     --project $ProjectId `
@@ -174,7 +174,7 @@ $dashboardSecrets = "KRAKEN_API_KEY=kraken-api-key:latest,KRAKEN_SECRET=kraken-s
     --image=$dashboardImage `
     --service-account $runtimeServiceAccountEmail `
     --allow-unauthenticated `
-    --set-env-vars "TRADE_HISTORY_BUCKET=$BucketName,TRADE_HISTORY_OBJECT=$TradeHistoryObject" `
+    --set-env-vars "TRADE_HISTORY_BUCKET=$BucketName,TRADE_HISTORY_OBJECT=$TradeHistoryObject,DASHBOARD_SNAPSHOT_OBJECT=dashboard_snapshot.json" `
     --set-secrets $dashboardSecrets | Out-Null
 
 $botSecrets = "KRAKEN_API_KEY=kraken-api-key:latest,KRAKEN_SECRET=kraken-secret:latest,TELEGRAM_TOKEN=telegram-token:latest,TELEGRAM_CHAT_ID=telegram-chat-id:latest"
@@ -189,7 +189,7 @@ if (-not [string]::IsNullOrWhiteSpace($withdrawalAccount)) {
     --service-account $runtimeServiceAccountEmail `
     --command python `
     --args bot.py `
-    --set-env-vars "TRADE_HISTORY_BUCKET=$BucketName,TRADE_HISTORY_OBJECT=$TradeHistoryObject,BOT_RUN_ONCE=true" `
+    --set-env-vars "TRADE_HISTORY_BUCKET=$BucketName,TRADE_HISTORY_OBJECT=$TradeHistoryObject,BOT_RUN_ONCE=true,NEWS_ML_SENTIMENT_ENABLED=true,NEWS_BLOCK_BUYS=true" `
     --set-secrets $botSecrets | Out-Null
 
 Write-Host "Deploy completed."

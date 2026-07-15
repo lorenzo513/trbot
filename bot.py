@@ -21,6 +21,7 @@ from market import (
     get_market_data,
     is_positive_trend,
 )
+from dashboard_snapshot import publish_dashboard_snapshot
 from notifications import send_telegram_message
 from news_monitor import analyze_symbol_news, get_news_block_buys_enabled, get_news_negative_threshold
 from storage import append_trade_row, ensure_trade_history, has_recent_event, log_protection_rejection
@@ -116,14 +117,22 @@ def log_trade_to_csv(
     append_trade_row(new_row)
 
 
-def get_trade_amount() -> float:
+def get_trade_amount(
+    eur_disponibili: float | None = None,
+    trade_attivi: int | None = None,
+) -> float:
     try:
         if MODALITA_PROVA:
+            if trade_attivi is not None and trade_attivi >= MAX_CONCURRENT_TRADES:
+                print("Nessuno slot disponibile per fare trading.")
+                return 0
             print(f"Budget fisso in modalita prova: {TRADE_AMOUNT_EUR} EUR per posizione.")
             return TRADE_AMOUNT_EUR
 
-        eur_disponibili = get_account_balance()
-        trade_attivi = get_open_positions_count()
+        if eur_disponibili is None:
+            eur_disponibili = get_account_balance()
+        if trade_attivi is None:
+            trade_attivi = get_open_positions_count()
         slot_disponibili = MAX_CONCURRENT_TRADES - trade_attivi
 
         if slot_disponibili <= 0:
@@ -233,10 +242,17 @@ def check_signals() -> None:
         print(f"Raggiunto il limite massimo di trade contemporanei ({active_count}/{MAX_CONCURRENT_TRADES}). Salto l'analisi.")
         return
 
+    eur_disponibili = TRADE_AMOUNT_EUR if MODALITA_PROVA else get_account_balance()
+    slots_used = active_count
+
     trading_targets = get_all_candidate_symbols()
     print(f"Asset candidati: {', '.join(trading_targets)}")
 
     for symbol in trading_targets:
+        if slots_used >= MAX_CONCURRENT_TRADES:
+            print(f"Raggiunto il limite massimo di trade contemporanei ({slots_used}/{MAX_CONCURRENT_TRADES}). Interrompo la scansione.")
+            break
+
         try:
             df = get_market_data(symbol)
             if not is_positive_trend(df):
@@ -251,7 +267,7 @@ def check_signals() -> None:
                 print(f"Filtro news attivo: {symbol} bloccato da sentiment negativo ({news_score:.2f}).")
                 continue
 
-            if has_open_position(symbol):
+            if has_open_position(symbol, counts=open_position_counts):
                 print(f"{symbol} ha gia una posizione aperta. Salto ulteriori segnali per evitare sovrapposizioni.")
                 continue
 
@@ -263,7 +279,7 @@ def check_signals() -> None:
             current_price = last_row["close"]
 
             if last_row["RSI"] < 40 and (current_price > last_row["EMA_9"] or (current_price >= last_row["EMA_9"] and news_label == 'POSITIVE')):
-                amount_to_buy = get_trade_amount() / current_price
+                amount_to_buy = get_trade_amount(eur_disponibili=eur_disponibili, trade_attivi=slots_used) / current_price
                 if amount_to_buy <= 0:
                     continue
 
@@ -277,6 +293,8 @@ def check_signals() -> None:
                 if MODALITA_PROVA:
                     entry_price = current_price
                     log_trade_to_csv(symbol, "BUY", amount_to_buy, entry_price, stop_loss, take_profit)
+                    slots_used += 1
+                    open_position_counts[symbol] = open_position_counts.get(symbol, 0) + 1
 
                     msg = (
                         f"[SIMULAZIONE] ORDINE COMPRA\n"
@@ -313,6 +331,11 @@ def check_signals() -> None:
                         msg += f"\nSentiment news: {news_label} ({round(news_score, 2)})"
                     send_telegram_message(msg)
 
+                    slots_used += 1
+                    open_position_counts[symbol] = open_position_counts.get(symbol, 0) + 1
+                    if eur_disponibili is not None:
+                        eur_disponibili = max(0.0, eur_disponibili - TRADE_AMOUNT_EUR)
+
                     try:
                         filled_amount = float(order.get("filled") or amount_to_buy)
                         place_stop_loss_and_take_profit(exchange, symbol, filled_amount, stop_loss, take_profit)
@@ -332,6 +355,11 @@ def run_bot() -> None:
 
     ultimo_controllo_prelievo = None
     check_signals()
+
+    try:
+        publish_dashboard_snapshot()
+    except Exception as exc:
+        print(f"Errore durante la pubblicazione dello snapshot dashboard: {exc}")
 
     ora_attuale = datetime.datetime.now()
     if ora_attuale.hour == 23 and ultimo_controllo_prelievo != ora_attuale.date():

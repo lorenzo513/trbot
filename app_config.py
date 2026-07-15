@@ -62,3 +62,19 @@ def get_trade_history_limit() -> int:
         return max(1, int(raw_value))
     except ValueError:
         return 500
+
+
+def get_news_sentiment_object_name() -> str:
+    return get_env("NEWS_SENTIMENT_OBJECT", default="news_sentiment.json")
+
+
+def get_news_sentiment_local_path() -> str:
+    return get_env("NEWS_SENTIMENT_LOCAL_PATH", default="news_sentiment.json")
+
+
+def get_dashboard_snapshot_object_name() -> str:
+    return get_env("DASHBOARD_SNAPSHOT_OBJECT", default="dashboard_snapshot.json")
+
+
+def get_dashboard_snapshot_local_path() -> str:
+    return get_env("DASHBOARD_SNAPSHOT_LOCAL_PATH", default="dashboard_snapshot.json")

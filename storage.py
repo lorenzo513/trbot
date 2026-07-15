@@ -154,6 +154,16 @@ def _load_api_history() -> pd.DataFrame:
     return _deduplicate_history(pd.DataFrame(rows))
 
 
+def load_persisted_trade_history() -> pd.DataFrame:
+    bucket_history = _load_csv_bucket_history()
+    local_history = _load_local_history()
+    if bucket_history.empty:
+        return local_history
+    if local_history.empty:
+        return bucket_history
+    return _deduplicate_history(pd.concat([bucket_history, local_history], ignore_index=True))
+
+
 def load_trade_history() -> pd.DataFrame:
     source = get_trade_history_source()
 

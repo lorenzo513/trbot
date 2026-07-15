@@ -273,5 +273,7 @@ def get_open_positions_count() -> int:
     return sum(get_open_position_counts().values())
 
 
-def has_open_position(symbol: str) -> bool:
+def has_open_position(symbol: str, counts: dict[str, int] | None = None) -> bool:
+    if counts is not None:
+        return counts.get(symbol, 0) > 0
     return get_open_position_counts().get(symbol, 0) > 0
