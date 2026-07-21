@@ -187,7 +187,7 @@ def compute_trade_signal(
 ) -> str:
     if (
         trend_positive
-        and rsi < 40
+        and rsi < 50
         and (current_price > ema_9 or (current_price >= ema_9 and news_label == "POSITIVE"))
     ):
         return "BUY"
@@ -228,12 +228,10 @@ def get_account_balance() -> float:
 
 def get_balance_snapshot() -> dict:
     balance = get_exchange().fetch_balance()
-    eur = balance.get("EUR", {})
     return {
         "free_eur": float(balance["free"].get("EUR", 0)),
         "used_eur": float(balance["used"].get("EUR", 0)),
         "total_eur": float(balance["total"].get("EUR", 0)),
-        "raw": balance,
     }
 
 

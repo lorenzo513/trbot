@@ -2,3 +2,4 @@ pandas
 streamlit
 google-cloud-storage
 streamlit-cookies-manager
+ccxt

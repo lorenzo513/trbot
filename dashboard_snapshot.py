@@ -57,7 +57,6 @@ def _empty_snapshot() -> dict[str, Any]:
             "free_eur": 0.0,
             "used_eur": 0.0,
             "total_eur": 0.0,
-            "raw": {},
         },
         "positions": {
             "open_positions": [],
@@ -85,8 +84,8 @@ def _build_symbol_snapshot(symbol: str, open_position_counts: dict[str, int]) ->
     news_snapshot = analyze_symbol_news(symbol, persist=False)
     news_label = str(news_snapshot["label"])
     news_score = float(news_snapshot["score"])
-    news_items = news_snapshot.get("items", [])
-    first_item = news_items[0] if isinstance(news_items, list) and news_items else None
+    news_items_count = int(news_snapshot.get("news_items_count", 0))
+    top_headline = str(news_snapshot.get("top_headline", "N/A"))
     trend_positive = is_positive_trend(market_df)
 
     return {
@@ -99,8 +98,8 @@ def _build_symbol_snapshot(symbol: str, open_position_counts: dict[str, int]) ->
         "sentiment": news_label,
         "score": round(news_score, 2),
         "sentiment_age": _sentiment_age_label(news_snapshot),
-        "news_items": len(news_items) if isinstance(news_items, list) else 0,
-        "top_headline": getattr(first_item, "title", "N/A") if first_item else "N/A",
+        "news_items": news_items_count,
+        "top_headline": top_headline,
         "volatility_pct": round(get_volatility_pct(market_df), 2),
         "open_trades": open_position_counts.get(symbol, 0),
     }

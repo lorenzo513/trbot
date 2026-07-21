@@ -121,7 +121,7 @@ def _load_api_history() -> pd.DataFrame:
     limit = get_trade_history_limit()
     since_ms = int((datetime.datetime.utcnow() - datetime.timedelta(days=lookback_days)).timestamp() * 1000)
 
-    rows: list[dict] = []
+    all_trades_dfs = []
 
     for symbol in get_all_candidate_symbols():
         try:
@@ -129,29 +129,35 @@ def _load_api_history() -> pd.DataFrame:
         except Exception:
             continue
 
-        for trade in trades:
-            rows.append(
-                {
-                    "source": "API",
-                    "timestamp": pd.to_datetime(trade.get("timestamp"), unit="ms", utc=True).tz_convert(None)
-                    if trade.get("timestamp") is not None
-                    else pd.NaT,
-                    "symbol": trade.get("symbol", symbol),
-                    "action": str(trade.get("side", "")).upper(),
-                    "amount": float(trade.get("amount") or trade.get("filled") or 0),
-                    "price": float(trade.get("price") or 0),
-                    "leverage": trade.get("leverage", 1),
-                    "stop_loss": None,
-                    "take_profit": None,
-                    "order_id": trade.get("order") or trade.get("ordertxid"),
-                    "trade_id": trade.get("id"),
-                }
+        if trades:
+            # Convert trades for the current symbol directly to a DataFrame
+            df_symbol_trades = pd.DataFrame(trades)
+            
+            # Apply transformations similar to the original rows.append logic
+            df_symbol_trades["source"] = "API"
+            df_symbol_trades["timestamp"] = df_symbol_trades["timestamp"].apply(
+                lambda ts: pd.to_datetime(ts, unit="ms", utc=True).tz_convert(None) if pd.notna(ts) else pd.NaT
             )
+            df_symbol_trades["symbol"] = df_symbol_trades["symbol"].fillna(symbol)
+            df_symbol_trades["action"] = df_symbol_trades["side"].astype(str).str.upper()
+            df_symbol_trades["amount"] = df_symbol_trades["amount"].fillna(df_symbol_trades["filled"]).fillna(0).astype(float)
+            df_symbol_trades["price"] = df_symbol_trades["price"].fillna(0).astype(float)
+            df_symbol_trades["leverage"] = df_symbol_trades["leverage"].fillna(1)
+            df_symbol_trades["stop_loss"] = None
+            df_symbol_trades["take_profit"] = None
+            df_symbol_trades["order_id"] = df_symbol_trades["order"].fillna(df_symbol_trades["ordertxid"])
+            df_symbol_trades["trade_id"] = df_symbol_trades["id"]
 
-    if not rows:
+            # Select and reorder columns to match TRADE_COLUMNS
+            df_symbol_trades = df_symbol_trades[TRADE_COLUMNS]
+            all_trades_dfs.append(df_symbol_trades)
+
+    if not all_trades_dfs:
         return empty_trade_history()
 
-    return _deduplicate_history(pd.DataFrame(rows))
+    # Concatenate all DataFrames at once
+    combined_df = pd.concat(all_trades_dfs, ignore_index=True)
+    return _deduplicate_history(combined_df)
 
 
 def load_persisted_trade_history() -> pd.DataFrame:

@@ -114,7 +114,7 @@ def get_news_negative_threshold() -> float:
 def get_ml_sentiment_enabled() -> bool:
     value = os.getenv("NEWS_ML_SENTIMENT_ENABLED")
     if value is None:
-        return True
+        return False
     return value.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
@@ -189,7 +189,7 @@ def _load_sentiment_pipeline():
     if not get_ml_sentiment_enabled():
         return None
 
-    model_name = os.getenv("NEWS_SENTIMENT_MODEL", "ProsusAI/finbert")
+    model_name = os.getenv("NEWS_SENTIMENT_MODEL", "distilbert-base-uncased-finetuned-sst-2-english")
     try:
         from transformers import pipeline
     except Exception:
@@ -337,13 +337,15 @@ def _news_item_from_dict(data: dict[str, object]) -> NewsItem:
 
 
 def _result_from_persisted_entry(symbol: str, entry: dict[str, object]) -> dict[str, object]:
-    raw_items = entry.get("items", [])
-    items = [_news_item_from_dict(item) for item in raw_items] if isinstance(raw_items, list) else []
+    # We no longer store full NewsItem objects, so 'items' will be an empty list.
+    # The relevant data is now in 'news_items_count' and 'top_headline'.
     return {
         "symbol": symbol,
         "label": str(entry.get("label", "NO_DATA")),
         "score": float(entry.get("score", 0.0)),
-        "items": items,
+        "items": [],  # Empty list for compatibility
+        "news_items_count": int(entry.get("news_items_count", 0)),
+        "top_headline": str(entry.get("top_headline", "N/A")),
         "cached_at": float(entry.get("cached_at", 0.0)),
         "from_cache": False,
         "cache_age_seconds": 0.0,
@@ -353,12 +355,14 @@ def _result_from_persisted_entry(symbol: str, entry: dict[str, object]) -> dict[
 
 def _result_to_persisted_entry(cached_at: float, result: dict[str, object]) -> dict[str, object]:
     items = result.get("items", [])
-    serialized_items = [_news_item_to_dict(item) for item in items] if isinstance(items, list) else []
+    news_items_count = len(items) if isinstance(items, list) else 0
+    top_headline = items[0].title if items and isinstance(items, list) and len(items) > 0 else "N/A"
     return {
         "cached_at": cached_at,
         "label": result.get("label", "NO_DATA"),
         "score": float(result.get("score", 0.0)),
-        "items": serialized_items,
+        "news_items_count": news_items_count,
+        "top_headline": top_headline,
     }
 
 
@@ -513,19 +517,26 @@ def analyze_symbol_news(symbol: str, limit: int = 8, *, persist: bool = True) ->
     combined_text = " ".join(f"{item.title} {item.summary}" for item in items)
     label, score = score_sentiment(combined_text)
 
+    news_items_count = len(items)
+    top_headline = items[0].title if items else "N/A"
+
     if not items:
         result = {
             "symbol": symbol,
             "label": "NO_DATA",
             "score": 0.0,
             "items": [],
+            "news_items_count": 0,
+            "top_headline": "N/A",
         }
     else:
         result = {
             "symbol": symbol,
             "label": label,
             "score": score,
-            "items": items,
+            "items": [],  # No longer storing full NewsItem objects here
+            "news_items_count": news_items_count,
+            "top_headline": top_headline,
         }
 
     result["cached_at"] = now
