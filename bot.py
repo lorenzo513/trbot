@@ -14,6 +14,10 @@ from market import (
     get_exchange,
     get_risk_multipliers,
     has_open_position,
+    get_open_positions, # Aggiunto: per recuperare le posizioni aperte
+    get_market_data, # Aggiunto: per recuperare i dati di mercato
+    get_volatility_pct, # Aggiunto: per calcolare la percentuale di volatilità
+    _normalize_symbol, # Aggiunto: per normalizzare i simboli
 )
 from notifications import send_telegram_message
 from news_monitor import get_news_block_buys_enabled, get_news_negative_threshold
@@ -333,6 +337,47 @@ def _execute_buy(
     return slots_used + 1, updated_eur
 
 
+def monitor_open_positions_and_protections() -> None:
+    """
+    Controlla tutte le posizioni aperte e si assicura che abbiano ordini SL/TP attivi.
+    """
+    print("[Monitoraggio] Controllo posizioni aperte e protezioni...")
+    exchange = get_exchange()
+    open_positions = get_open_positions()
+
+    for position in open_positions:
+        symbol = _normalize_symbol(position.get("symbol"))
+        if not symbol:
+            continue
+
+        try:
+            # Recupera i dati di mercato correnti per calcolare volatilità e prezzo
+            market_data_df = get_market_data(symbol)
+            if market_data_df.empty:
+                print(f"Non e' stato possibile recuperare i dati di mercato per {symbol}. Salto il monitoraggio.")
+                continue
+
+            current_price = float(market_data_df.iloc[-1]["close"])
+            volatility_pct = get_volatility_pct(market_data_df)
+
+            # L'importo della posizione (amount) è già la quantità riempita
+            amount = float(position.get("amount") or position.get("contracts") or 0)
+            if amount <= 0:
+                print(f"Quantita' della posizione per {symbol} non valida: {amount}. Salto il monitoraggio.")
+                continue
+
+            # Ricalcola SL/TP basandosi sul prezzo corrente e volatilità
+            stop_loss, take_profit = get_risk_levels(symbol, current_price, volatility_pct)
+
+            # Piazzare (o ri-piazzare) gli ordini di protezione
+            place_stop_loss_and_take_profit(exchange, symbol, amount, stop_loss, take_profit)
+            print(f"Protezioni SL/TP assicurate per {symbol} (SL: {round(stop_loss, 4)}, TP: {round(take_profit, 4)})")
+
+        except Exception as exc:
+            print(f"Errore durante il monitoraggio delle protezioni per {symbol}: {exc}")
+            send_telegram_message(f"Errore critico nel monitoraggio protezioni per {symbol}: {exc}")
+
+
 def check_signals(snapshot: dict[str, object]) -> None:
     print(f"[{pd.Timestamp.now().strftime('%H:%M:%S')}] Valutazione segnali di trading...")
 
@@ -374,6 +419,7 @@ def check_signals(snapshot: dict[str, object]) -> None:
             news_label = str(symbol_data.get("sentiment", "NO_DATA"))
             news_score = float(symbol_data.get("score", 0.0))
 
+
             if get_news_block_buys_enabled() and news_label == "NEGATIVE" and news_score <= news_threshold:
                 print(f"Filtro news attivo: {symbol} bloccato da sentiment negativo ({news_score:.2f}).")
                 continue
@@ -402,6 +448,9 @@ def check_signals(snapshot: dict[str, object]) -> None:
 
 def run_bot() -> None:
     ensure_trade_history()
+
+    # Nuova chiamata per monitorare e assicurare le protezioni
+    monitor_open_positions_and_protections()
 
     snapshot: dict[str, object] = {}
     try:

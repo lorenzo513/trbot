@@ -174,8 +174,8 @@ def is_positive_trend(df: pd.DataFrame) -> bool:
     if ema_now < ema_prev:
         return False
 
-    price_change = (current_price - float(df.iloc[-5]["close"])) / float(df.iloc[-5]["close"])
-    return price_change > 0
+    # Rimosso il controllo price_change > 0 per rendere il trend meno restrittivo
+    return True
 
 
 def compute_trade_signal(
