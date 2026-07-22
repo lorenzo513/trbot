@@ -1,4 +1,5 @@
 import datetime
+import gc
 
 import pandas as pd
 
@@ -355,6 +356,8 @@ def monitor_open_positions_and_protections() -> None:
             market_data_df = get_market_data(symbol)
             if market_data_df.empty:
                 print(f"Non e' stato possibile recuperare i dati di mercato per {symbol}. Salto il monitoraggio.")
+                del market_data_df
+                gc.collect()
                 continue
 
             current_price = float(market_data_df.iloc[-1]["close"])
@@ -364,6 +367,8 @@ def monitor_open_positions_and_protections() -> None:
             amount = float(position.get("amount") or position.get("contracts") or 0)
             if amount <= 0:
                 print(f"Quantita' della posizione per {symbol} non valida: {amount}. Salto il monitoraggio.")
+                del market_data_df
+                gc.collect()
                 continue
 
             # Ricalcola SL/TP basandosi sul prezzo corrente e volatilità
@@ -373,9 +378,15 @@ def monitor_open_positions_and_protections() -> None:
             place_stop_loss_and_take_profit(exchange, symbol, amount, stop_loss, take_profit)
             print(f"Protezioni SL/TP assicurate per {symbol} (SL: {round(stop_loss, 4)}, TP: {round(take_profit, 4)})")
 
+            # Ripulitura della memoria
+            del market_data_df
+            gc.collect()
+
         except Exception as exc:
             print(f"Errore durante il monitoraggio delle protezioni per {symbol}: {exc}")
             send_telegram_message(f"Errore critico nel monitoraggio protezioni per {symbol}: {exc}")
+            gc.collect()
+
 
 
 def check_signals(snapshot: dict[str, object]) -> None:
@@ -464,6 +475,11 @@ def run_bot() -> None:
     ora_attuale = datetime.datetime.now()
     if ora_attuale.hour == 23:
         controlla_e_preleva_profitti()
+
+    # Ripulitura memoria per evitare memory leak
+    snapshot.clear()
+    gc.collect()
+
 
 
 if __name__ == "__main__":

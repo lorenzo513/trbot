@@ -13,9 +13,10 @@ CORE_CRYPTO_TARGETS = [
     "SOL/EUR",
     "XRP/EUR",
     "LINK/EUR",
-    "ADA/EUR",
+    "MON/EUR",
     "DOGE/EUR",
     "EDGE/EUR",
+    "MEW/EUR",
 ]
 
 # Backward-compatible alias used across the project.

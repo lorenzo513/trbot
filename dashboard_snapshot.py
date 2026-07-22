@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import gc
 import json
 import time
 from pathlib import Path
@@ -127,6 +128,9 @@ def build_dashboard_snapshot() -> dict[str, Any]:
             symbols[symbol] = _build_symbol_snapshot(symbol, open_position_counts)
         except Exception as exc:
             symbols[symbol] = _error_symbol_snapshot(symbol, exc, open_position_counts)
+
+        # Ripulitura della memoria dopo ogni simbolo processato
+        gc.collect()
 
     flush_sentiment_cache()
 

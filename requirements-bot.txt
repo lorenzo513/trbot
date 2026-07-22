@@ -2,4 +2,3 @@ ccxt
 pandas
 requests
 google-cloud-storage
-transformers
